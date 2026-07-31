@@ -67,7 +67,7 @@ def get_instance(
 @router.patch(
     "/{instance_id}/status",
     response_model=InstanceOut,
-    summary="Update status (RUNNING deletion blocked applies to DELETE)",
+    summary="Update instance status and optional CPU usage",
 )
 def update_status(
     instance_id: int,
