@@ -86,7 +86,9 @@ class Instance(Base):
     )
 
     client: Mapped["Client"] = relationship(back_populates="instances")
-    alerts: Mapped[list["Alert"]] = relationship(back_populates="instance")
+    alerts: Mapped[list["Alert"]] = relationship(
+        back_populates="instance", cascade="all, delete-orphan"
+    )
 
 
 class Alert(Base):

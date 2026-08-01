@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.config import UNIT_PRICES
 from app.core.exceptions import ActiveInstanceException, NotFoundException
-from app.models import Alert, Client, Instance, InstanceStatus
+from app.models import Client, Instance, InstanceStatus
 from app.models.models import utcnow
 from app.schemas.schemas import InstanceCreate, InstanceStatusUpdate
 
@@ -99,7 +99,5 @@ def delete_instance(db: Session, instance_id: int) -> None:
     instance = get_instance(db, instance_id)
     if instance.status == InstanceStatus.RUNNING:
         raise ActiveInstanceException(instance_id)
-    # Remove dependent alerts first (FK constraint)
-    db.query(Alert).filter(Alert.instanceId == instance_id).delete()
     db.delete(instance)
     db.commit()
