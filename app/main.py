@@ -11,7 +11,12 @@ from app.controllers import (
     instance_controller,
     monitor_controller,
 )
-from app.core.exceptions import ActiveInstanceException, ForbiddenException, NotFoundException
+from app.core.exceptions import (
+    ActiveInstanceException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 from app.database import Base, SessionLocal, engine
 from app.seed import seed
 
@@ -55,6 +60,11 @@ async def not_found_handler(request: Request, exc: NotFoundException):
 @app.exception_handler(ForbiddenException)
 async def forbidden_handler(request: Request, exc: ForbiddenException):
     return JSONResponse(status_code=403, content={"error": "Forbidden", "detail": exc.detail})
+
+
+@app.exception_handler(ValidationException)
+async def validation_handler(request: Request, exc: ValidationException):
+    return JSONResponse(status_code=400, content={"error": "ValidationError", "detail": exc.detail})
 
 
 app.include_router(auth_controller.router)
