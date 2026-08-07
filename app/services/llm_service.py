@@ -40,10 +40,17 @@ def _llm_diagnosis(instance: Instance, alerts: list[Alert]) -> str | None:
     try:
         import anthropic
 
-        client = anthropic.Anthropic()
+        # The SDK reads the ANTHROPIC_API_KEY *environment variable* — it never reads
+        # .env, so the key pydantic-settings loaded has to be handed over explicitly.
+        # With nothing configured, fall through to the SDK's own credential resolution
+        # (env var, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile).
+        api_key = settings.ANTHROPIC_API_KEY.strip()
+        client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         response = client.messages.create(
             model=MODEL,
-            max_tokens=1024,
+            # Adaptive thinking spends thinking tokens out of this same budget, so a
+            # tight cap can consume it all and return an empty or truncated answer.
+            max_tokens=16000,
             thinking={"type": "adaptive"},
             system=(
                 "You are a senior cloud infrastructure engineer at TechValley, an IT "
@@ -64,6 +71,8 @@ def _llm_diagnosis(instance: Instance, alerts: list[Alert]) -> str | None:
                 }
             ],
         )
+        if response.stop_reason == "max_tokens":
+            logger.warning("LLM diagnosis hit the max_tokens cap; the answer may be truncated")
         text = "".join(block.text for block in response.content if block.type == "text").strip()
         return text or None
     except Exception as exc:  # no key, network error, etc. -> fall back
