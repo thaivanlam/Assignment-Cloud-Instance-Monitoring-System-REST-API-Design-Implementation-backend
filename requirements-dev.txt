@@ -1,0 +1,7 @@
+# Development-only tooling. Install with: pip install -r requirements-dev.txt
+# Then download the browser binary once: playwright install chromium
+
+-r requirements.txt
+
+# Drives Swagger UI to capture per-endpoint screenshots (scripts/capture_swagger_ui.py)
+playwright>=1.49
