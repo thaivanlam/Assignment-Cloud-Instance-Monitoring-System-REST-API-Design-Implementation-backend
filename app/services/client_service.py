@@ -4,8 +4,8 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.config import SLA_THRESHOLDS, UNIT_PRICES
-from app.core.exceptions import NotFoundException
-from app.models import Client, Instance, InstanceStatus
+from app.core.exceptions import NotFoundException, ValidationException
+from app.models import Client, Instance, InstanceStatus, Role
 from app.models.models import utcnow
 from app.schemas.schemas import ClientCreate
 
@@ -16,6 +16,11 @@ def create_client(db: Session, data: ClientCreate) -> Client:
     manager = db.get(Member, data.managerId)
     if manager is None:
         raise NotFoundException("Member (manager)", data.managerId)
+    if manager.role != Role.CLIENT_MANAGER:
+        raise ValidationException(
+            f"managerId {data.managerId} must belong to a CLIENT_MANAGER "
+            f"(found role {manager.role.value})"
+        )
     client = Client(
         clientName=data.clientName,
         contractPlan=data.contractPlan,

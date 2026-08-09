@@ -19,3 +19,11 @@ class ForbiddenException(Exception):
     def __init__(self, detail: str = "You do not have permission to access this resource"):
         self.detail = detail
         super().__init__(detail)
+
+
+class ValidationException(Exception):
+    """Raised when request data fails a business-rule check (maps to HTTP 400)."""
+
+    def __init__(self, detail: str):
+        self.detail = detail
+        super().__init__(detail)
