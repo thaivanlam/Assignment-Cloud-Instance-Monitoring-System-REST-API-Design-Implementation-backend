@@ -118,6 +118,15 @@ docs/ERD.md                  # Step 1 — ERD (mermaid) + design notes
   → HTTP **409** with a structured error body. STOPPED / ERROR instances delete normally
   (their alerts are removed with them).
 
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+The focused Member C design notes and Swagger demo flow are in [`docs/MEMBER_C.md`](docs/MEMBER_C.md).
+
 ### LLM Diagnosis (`GET /api/instances/{id}/diagnosis`)
 - Sends instance metadata + recent alert history to **Claude (`claude-opus-4-8`)** via the
   official Anthropic SDK and returns a structured diagnosis (Probable Causes / Recommended

@@ -39,7 +39,7 @@ def check_warnings(db: Session, client_ids: list[int] | None) -> list[Instance]:
     )
     if client_ids is not None:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
-    instances = query.all()
+    instances = query.order_by(Instance.id).all()
 
     for inst in instances:
         _record_alert(
@@ -56,7 +56,7 @@ def check_errors(db: Session, client_ids: list[int] | None) -> list[Instance]:
     query = db.query(Instance).filter(Instance.status == InstanceStatus.ERROR)
     if client_ids is not None:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
-    instances = query.all()
+    instances = query.order_by(Instance.id).all()
 
     for inst in instances:
         _record_alert(
@@ -70,17 +70,18 @@ def check_errors(db: Session, client_ids: list[int] | None) -> list[Instance]:
 def check_long_stopped(db: Session, client_ids: list[int] | None) -> list[Instance]:
     """Instances STOPPED for 48+ hours (based on last status update time).
     Also records a LONG_STOPPED alert for visibility."""
-    threshold = utcnow() - timedelta(hours=settings.LONG_STOPPED_HOURS)
+    now = utcnow()
+    threshold = now - timedelta(hours=settings.LONG_STOPPED_HOURS)
     query = db.query(Instance).filter(
         Instance.status == InstanceStatus.STOPPED,
         Instance.updatedAt <= threshold,
     )
     if client_ids is not None:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
-    instances = query.all()
+    instances = query.order_by(Instance.id).all()
 
     for inst in instances:
-        hours = (utcnow() - inst.updatedAt).total_seconds() / 3600
+        hours = (now - inst.updatedAt).total_seconds() / 3600
         _record_alert(
             db, inst, AlertType.LONG_STOPPED,
             f"Instance '{inst.instanceName}' has been STOPPED for {hours:.0f} hours "
@@ -112,8 +113,7 @@ def build_report(db: Session, client_ids: list[int] | None) -> dict:
     ).count()
 
     total_cost = (
-        inst_query.filter(Instance.status == InstanceStatus.RUNNING)
-        .with_entities(func.coalesce(func.sum(Instance.monthlyCost), 0.0))
+        inst_query.with_entities(func.coalesce(func.sum(Instance.monthlyCost), 0.0))
         .scalar()
     )
 

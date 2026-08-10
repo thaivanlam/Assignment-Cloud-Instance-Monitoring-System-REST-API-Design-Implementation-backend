@@ -84,11 +84,23 @@ def get_instance(db: Session, instance_id: int) -> Instance:
 
 def update_status(db: Session, instance_id: int, data: InstanceStatusUpdate) -> Instance:
     instance = get_instance(db, instance_id)
+
+    # Treat an identical PATCH as a no-op.  This matters because the monitoring
+    # module uses updatedAt as the best available "status changed at" value for
+    # the 48-hour STOPPED rule.  Repeating the same request must not restart that
+    # clock.
+    next_cpu_usage = data.cpuUsage
+    if next_cpu_usage is None and data.status != InstanceStatus.RUNNING:
+        next_cpu_usage = 0.0
+
+    status_changed = instance.status != data.status
+    cpu_changed = next_cpu_usage is not None and instance.cpuUsage != next_cpu_usage
+    if not status_changed and not cpu_changed:
+        return instance
+
     instance.status = data.status
-    if data.cpuUsage is not None:
-        instance.cpuUsage = data.cpuUsage
-    elif data.status != InstanceStatus.RUNNING:
-        instance.cpuUsage = 0.0
+    if next_cpu_usage is not None:
+        instance.cpuUsage = next_cpu_usage
     instance.updatedAt = utcnow()
     db.commit()
     db.refresh(instance)
