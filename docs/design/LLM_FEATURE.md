@@ -8,9 +8,9 @@ Instance Monitoring System: **automatic incident diagnosis for a cloud instance*
 | Endpoint | `GET /api/instances/{id}/diagnosis` |
 | Provider / SDK | Anthropic Claude, official `anthropic` Python SDK (`>=0.116.0`) |
 | Model | `claude-opus-4-8` |
-| Service module | [app/services/llm_service.py](../app/services/llm_service.py) |
-| Controller | [app/controllers/instance_controller.py:98-125](../app/controllers/instance_controller.py#L98-L125) |
-| Response DTO | `DiagnosisResponse` in [app/schemas/schemas.py:144-149](../app/schemas/schemas.py#L144-L149) |
+| Service module | [app/services/llm_service.py](../../app/services/llm_service.py) |
+| Controller | [app/controllers/instance_controller.py:98-125](../../app/controllers/instance_controller.py#L98-L125) |
+| Response DTO | `DiagnosisResponse` in [app/schemas/schemas.py:144-149](../../app/schemas/schemas.py#L144-L149) |
 
 ---
 
@@ -432,7 +432,7 @@ surface only as `"source": "rule-based"`.
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-`ANTHROPIC_API_KEY` is declared in `Settings` ([app/config.py:14](../app/config.py#L14))
+`ANTHROPIC_API_KEY` is declared in `Settings` ([app/config.py:14](../../app/config.py#L14))
 with an empty default, so a missing key is a supported configuration rather than a
 startup failure. `CPU_WARNING_THRESHOLD` (default `80.0`) is read by the rule-based
 fallback so its causes stay consistent with the monitoring rules used elsewhere.
@@ -471,3 +471,16 @@ fallback so its causes stay consistent with the monitoring rules used elsewhere.
   per call would enable cost attribution per client.
 - **Single language.** Output is pinned to English. A `lang` query parameter mapped
   into the system prompt would support the mixed-language team.
+
+---
+
+## 9. Related
+
+| Document | Why |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Where `llm_service` sits in the layering |
+| [ERD.md](ERD.md) | `instances` and `alerts` — the data fed into the prompt |
+| [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | `DiagnosisResponse` in the endpoint reference |
+| [../api/ERRORS.md](../api/ERRORS.md) | Why there is no `5xx` for provider failures |
+| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | How the alert history in the prompt is produced |
+| [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Demo step for this endpoint |
