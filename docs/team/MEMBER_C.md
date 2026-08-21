@@ -50,4 +50,15 @@ pip install -r requirements-dev.txt
 pytest -q
 ```
 
-The Member C integration tests cover authentication, role scoping, status changes, CPU normalization, warning/error/long-stopped detection, alert auto-recording, duplicate prevention, and the full report.
+The Member C integration tests ([tests/test_member_c.py](../../tests/test_member_c.py)) cover authentication, role scoping, status changes, CPU normalization, warning/error/long-stopped detection, alert auto-recording, duplicate prevention, and the full report.
+
+## Related
+
+| Document | Why |
+|---|---|
+| [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFECYCLE.md) | Status transitions, CPU reset, idempotent updates |
+| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | Detection thresholds and duplicate prevention |
+| [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md) | Role scoping applied to monitoring results |
+| [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | Request/response shapes for these endpoints |
+| [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Parts 3–4 are this demo flow, with expected numbers |
+| [../demo/SEED_DATA.md](../demo/SEED_DATA.md) | Which seeded instances trigger which alert |
