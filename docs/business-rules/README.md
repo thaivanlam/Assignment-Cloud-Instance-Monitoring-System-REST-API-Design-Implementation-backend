@@ -33,4 +33,5 @@ can be overridden through `.env` without touching code.
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | The endpoints these rules govern |
 | [../api/ERRORS.md](../api/ERRORS.md) | How a violated rule surfaces to the caller |
 | [../design/ERD.md](../design/ERD.md) | Columns the rules read and write |
+| [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Which test case pins each rule down |
 | [../team/MEMBER_C.md](../team/MEMBER_C.md) | Status and monitoring scope in assignment terms |

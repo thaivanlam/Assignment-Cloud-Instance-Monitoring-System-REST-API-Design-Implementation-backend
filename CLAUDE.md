@@ -17,10 +17,15 @@ MVC layout under `app/`:
 
 ```bash
 uvicorn app.main:app --reload   # run (Swagger at /docs)
-pytest -q                       # tests
+pytest -q                       # tests — 104 functional tests, no API key needed
 ```
 
 `monitoring.db` is created and seeded automatically on startup by `app/seed.py`.
+
+The test suite drives the API over HTTP against a per-test in-memory database seeded with
+the same demo data, so its expected values are exact. What it covers:
+[docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md); how to run it:
+[docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md).
 
 ## Documentation rules
 

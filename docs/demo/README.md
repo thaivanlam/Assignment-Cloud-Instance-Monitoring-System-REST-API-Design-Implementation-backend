@@ -33,4 +33,5 @@ restart — the seed runs again.
 | [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md) | Token mechanics behind the login step |
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | Reference for every call in the walkthrough |
 | [../business-rules/](../business-rules/README.md) | What the walkthrough is demonstrating |
+| [../testing/](../testing/README.md) | The automated equivalent of the walkthrough — it asserts the same figures |
 | [screenshots/](../screenshots/README.md) | Captured Swagger UI responses |

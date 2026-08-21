@@ -30,5 +30,6 @@ followed by a `docs:` commit.
 |---|---|
 | [../README.md](../README.md) | Documentation index — where each document lives |
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | Which layer a change belongs in |
-| [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Running the tests before you commit |
+| [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the tests before you commit |
+| [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Verifying the same behaviour by hand |
 | [../../CLAUDE.md](../../CLAUDE.md) | Condensed form of these rules, loaded automatically by Claude Code |
