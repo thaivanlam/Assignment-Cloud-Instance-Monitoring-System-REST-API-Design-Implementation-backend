@@ -32,10 +32,14 @@ uvicorn app.main:app --reload
   [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md).
 
 ```bash
-# Tests
+# Tests — 104 functional tests, no API key or running server needed
 pip install -r requirements-dev.txt
 pytest -q
 ```
+
+Details in [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md); what each
+suite asserts is in
+[docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md).
 
 ---
 
@@ -50,6 +54,7 @@ linking to the files inside it.
 | [docs/business-rules/](docs/business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
 | [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
+| [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
 | [docs/team/](docs/team/README.md) | Per-member assignment scope |
 | [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
 | [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
@@ -68,6 +73,8 @@ linking to the files inside it.
 | Data model (ERD) | [docs/design/ERD.md](docs/design/ERD.md) |
 | Architecture | [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) |
 | LLM diagnosis feature | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
+| Running the tests | [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) |
+| What the tests cover | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) |
 | Commit conventions | [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md) |
 | Documentation rules | [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md) |
 

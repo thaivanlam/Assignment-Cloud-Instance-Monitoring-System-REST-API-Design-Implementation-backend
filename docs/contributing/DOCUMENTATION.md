@@ -69,6 +69,7 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 | `app/config.py` — thresholds, pricing | [../business-rules/README.md](../business-rules/README.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 | `app/seed.py` — demo data | [../demo/SEED_DATA.md](../demo/SEED_DATA.md), [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) |
 | `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md) |
+| `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) |
 | Project layout or new module | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 
 A change that alters observable behaviour also belongs in
@@ -84,9 +85,10 @@ number there.
 - **Document known gaps honestly.** The SLA approximation, the unread `cost_snapshots`
   table, and the two different error body shapes are all written down precisely because
   a reader would otherwise assume they were mistakes.
-- **Keep example figures verifiable.** Numbers in `docs/demo/` are checked against
-  [../../tests/test_member_c.py](../../tests/test_member_c.py); if a change moves them,
-  move the document too.
+- **Keep example figures verifiable.** Numbers in `docs/demo/` are asserted by the test
+  suite in [../../tests/](../../tests/); if a change moves them, move the document too.
+  What each suite pins down is catalogued in
+  [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md).
 - **Link with relative paths** so links work on GitHub and in local editors alike.
 
 ---
@@ -97,5 +99,6 @@ number there.
 |---|---|
 | [COMMITS.md](COMMITS.md) | Commit prefixes and message structure |
 | [README.md](README.md) | Contributing index |
+| [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the suite before you commit |
 | [../README.md](../README.md) | Documentation index |
 | [../../CLAUDE.md](../../CLAUDE.md) | Condensed rules loaded automatically by Claude Code |
