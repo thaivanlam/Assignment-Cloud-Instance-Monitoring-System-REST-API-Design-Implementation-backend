@@ -38,23 +38,11 @@ These apply to every change in this repository, for every contributor.
    [docs/README.md](docs/README.md), and to the direct-links table in
    [README.md](README.md).
 
-### Source → document mapping
-
-| When you change… | Update… |
-|---|---|
-| `app/controllers/**` — routes, params, status codes | [docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md), [docs/api/OVERVIEW.md](docs/api/OVERVIEW.md) |
-| `app/schemas/**` — request/response fields | [docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md) |
-| `app/models/**` — tables, columns, relationships | [docs/design/ERD.md](docs/design/ERD.md) |
-| `app/services/instance_service.py` | [docs/business-rules/INSTANCE_LIFECYCLE.md](docs/business-rules/INSTANCE_LIFECYCLE.md) |
-| `app/services/monitor_service.py`, `alert_service.py` | [docs/business-rules/ALERTING.md](docs/business-rules/ALERTING.md) |
-| `app/services/client_service.py` — cost | [docs/business-rules/COST.md](docs/business-rules/COST.md) |
-| `app/services/client_service.py` — SLA | [docs/business-rules/SLA.md](docs/business-rules/SLA.md) |
-| `app/services/llm_service.py` | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
-| `app/core/**` — auth, deps, exceptions | [docs/api/AUTHENTICATION.md](docs/api/AUTHENTICATION.md), [docs/business-rules/AUTHORIZATION.md](docs/business-rules/AUTHORIZATION.md), [docs/api/ERRORS.md](docs/api/ERRORS.md) |
-| `app/config.py` — thresholds, pricing | [docs/business-rules/README.md](docs/business-rules/README.md), [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) |
-| `app/seed.py` — demo data | [docs/demo/SEED_DATA.md](docs/demo/SEED_DATA.md), [docs/demo/ACCOUNTS.md](docs/demo/ACCOUNTS.md) |
-| `app/main.py` — routers, handlers, startup | [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md), [docs/api/ERRORS.md](docs/api/ERRORS.md) |
-| Project layout or new module | [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) |
+The **source → document mapping** — which document to read and update for each source
+directory — is the table in
+[docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md#5-source--document-mapping).
+Read it before changing anything under `app/`. It is kept in one place so it cannot
+drift; do not copy it back into this file.
 
 A change that alters observable behaviour also belongs in
 [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md) if it invalidates a step or an
@@ -78,6 +66,9 @@ A change that alters behaviour *and* its document is one `feat:` or `fix:` commi
 covering both — the documentation rule above requires them to land together, so do not
 split the doc update into a separate `docs:` commit. Use `docs:` only when nothing
 outside `docs/`, `README.md`, or `CLAUDE.md` changes.
+
+Subject and body style, and how to scope a commit:
+[docs/contributing/COMMITS.md](docs/contributing/COMMITS.md).
 
 ## Reference docs — fetch on demand
 

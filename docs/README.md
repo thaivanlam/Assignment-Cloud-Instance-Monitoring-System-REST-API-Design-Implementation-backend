@@ -10,6 +10,7 @@ own README linking to the files inside it.
 | [demo/](demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | [design/](design/README.md) | Architecture, ERD, LLM feature design |
 | [team/](team/README.md) | Per-member assignment scope |
+| [contributing/](contributing/README.md) | Commit conventions and documentation rules |
 | [screenshots/](screenshots/README.md) | Captured Swagger UI responses |
 
 ---
@@ -23,6 +24,7 @@ own README linking to the files inside it.
 | Understand *why* a response looks that way | [business-rules/README.md](business-rules/README.md) |
 | Change or extend the code | [design/ARCHITECTURE.md](design/ARCHITECTURE.md) → [design/ERD.md](design/ERD.md) |
 | Work on the AI diagnosis feature | [design/LLM_FEATURE.md](design/LLM_FEATURE.md) |
+| Commit a change | [contributing/COMMITS.md](contributing/COMMITS.md) |
 
 ---
 
@@ -60,16 +62,23 @@ own README linking to the files inside it.
 
 - [MEMBER_C.md](team/MEMBER_C.md) — instance status and monitoring scope
 
+**[contributing/](contributing/README.md)**
+
+- [COMMITS.md](contributing/COMMITS.md) — commit prefixes, subject and body style, commit scope
+- [DOCUMENTATION.md](contributing/DOCUMENTATION.md) — documentation rules and source → document mapping
+
 ---
 
 ## Conventions for these documents
 
 - **English only**, regardless of the language used in discussion.
-- **Code and docs change together.** A pull request that changes behaviour updates the
+- **Code and docs change together.** A change that alters behaviour updates the
   document describing that behaviour in the same commit.
 - **Read before you write.** Consult the document covering the area you are about to
   change before changing it.
 - **Every folder has a README** linking to its files and to related documents elsewhere.
+- **Commit subjects carry a type prefix** — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
 
-The mapping from source directory to document is in
-[CLAUDE.md](../CLAUDE.md#documentation-rules).
+Full rules, including the source → document mapping:
+[contributing/DOCUMENTATION.md](contributing/DOCUMENTATION.md) and
+[contributing/COMMITS.md](contributing/COMMITS.md).

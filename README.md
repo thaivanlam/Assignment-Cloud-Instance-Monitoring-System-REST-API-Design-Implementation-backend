@@ -51,6 +51,7 @@ linking to the files inside it.
 | [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
 | [docs/team/](docs/team/README.md) | Per-member assignment scope |
+| [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
 | [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
 
 ### Direct links
@@ -67,6 +68,8 @@ linking to the files inside it.
 | Data model (ERD) | [docs/design/ERD.md](docs/design/ERD.md) |
 | Architecture | [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) |
 | LLM diagnosis feature | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
+| Commit conventions | [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md) |
+| Documentation rules | [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md) |
 
 ---
 
@@ -121,5 +124,9 @@ scripts/                     # Swagger UI screenshot capture
 ## Contributing
 
 Documentation is written in **English** and changes in the **same commit** as the code
-it describes. Before changing code, read the document covering that area; the
-source-to-document mapping is in [CLAUDE.md](CLAUDE.md#documentation-rules).
+it describes. Before changing code, read the document covering that area — the
+source-to-document mapping is in
+[docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md).
+
+Commit subjects carry a type prefix — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
+See [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md).
