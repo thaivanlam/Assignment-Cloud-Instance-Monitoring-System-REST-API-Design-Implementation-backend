@@ -1,10 +1,12 @@
 # TechValley — Cloud Instance Monitoring System
 
-Internal monitoring system replacing manual Excel tracking of cloud instances for 10 client
-companies. Built for the TechValley Developer Track assignment.
+Internal monitoring system replacing manual Excel tracking of cloud instances for 10
+client companies. Built for the TechValley Developer Track assignment.
 
-**Stack:** Python · FastAPI · SQLAlchemy (SQLite) · JWT (PyJWT) · Swagger/OpenAPI · Anthropic Claude (LLM diagnosis)
-**Architecture:** MVC — `models/` (data), `schemas/` (DTO/view), `controllers/` (routing), `services/` (business logic)
+**Stack:** Python · FastAPI · SQLAlchemy (SQLite) · Pydantic v2 · JWT (PyJWT) ·
+Swagger/OpenAPI · Anthropic Claude (LLM diagnosis)
+**Architecture:** MVC — `models/` (data), `schemas/` (DTO), `controllers/` (routing),
+`services/` (business logic)
 
 ---
 
@@ -24,23 +26,79 @@ uvicorn app.main:app --reload
 ```
 
 - Swagger UI: **http://127.0.0.1:8000/docs**
-- The database (`monitoring.db`) is created and **seeded automatically** on first run
-  (2 managers + 1 admin, 10 clients, 15 instances, cost snapshots).
+- `monitoring.db` is created and **seeded automatically** on first run — 3 members,
+  10 clients, 15 instances, cost snapshots.
+- Log in with `admin@techvalley.vn` / `admin123!`, then follow
+  [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md).
 
-### Demo accounts
-
-| Role | Email | Password | Access |
-|---|---|---|---|
-| ADMIN | `admin@techvalley.vn` | `admin123!` | All clients & instances |
-| CLIENT_MANAGER | `lam@techvalley.vn` | `manager123!` | Clients 1–5 only |
-| CLIENT_MANAGER | `minh@techvalley.vn` | `manager123!` | Clients 6–10 only |
-
-**How to authenticate in Swagger:** call `POST /api/auth/login`, copy the `accessToken`,
-click **Authorize** (top right), and paste the token.
+```bash
+# Tests
+pip install -r requirements-dev.txt
+pytest -q
+```
 
 ---
 
-## Project Structure (MVC)
+## Documentation
+
+Full documentation lives in **[docs/](docs/README.md)**. Each folder has its own README
+linking to the files inside it.
+
+| Folder | Contents |
+|---|---|
+| [docs/api/](docs/api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
+| [docs/business-rules/](docs/business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
+| [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
+| [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
+| [docs/team/](docs/team/README.md) | Per-member assignment scope |
+| [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
+
+### Direct links
+
+| Topic | Document |
+|---|---|
+| API endpoint reference | [docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md) |
+| Authentication and JWT | [docs/api/AUTHENTICATION.md](docs/api/AUTHENTICATION.md) |
+| Pagination, filtering, sorting | [docs/api/CONVENTIONS.md](docs/api/CONVENTIONS.md) |
+| Status codes and error bodies | [docs/api/ERRORS.md](docs/api/ERRORS.md) |
+| Business rules | [docs/business-rules/README.md](docs/business-rules/README.md) |
+| Demo accounts | [docs/demo/ACCOUNTS.md](docs/demo/ACCOUNTS.md) |
+| Demo walkthrough | [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md) |
+| Data model (ERD) | [docs/design/ERD.md](docs/design/ERD.md) |
+| Architecture | [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) |
+| LLM diagnosis feature | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
+
+---
+
+## API at a glance
+
+Nineteen endpoints across five routers, plus a `GET /` health check. Full detail in
+[docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md).
+
+| Group | Endpoints |
+|---|---|
+| Auth | `POST /api/auth/login` |
+| Instances | `POST` / `GET` `/api/instances`, `GET` `/{id}`, `PATCH` `/{id}/status`, `DELETE` `/{id}`, `GET` `/{id}/diagnosis` |
+| Monitoring | `GET /api/monitor/warnings` · `/errors` · `/long-stopped` · `/report` |
+| Alerts | `GET /api/alerts`, `PATCH /api/alerts/{id}/resolve` |
+| Clients | `POST` / `GET` `/api/clients`, `GET` `/{id}/instances` · `/cost` · `/cost-forecast` · `/sla` |
+
+Key behaviours, each documented in [docs/business-rules/](docs/business-rules/README.md):
+
+- **Role scoping** — ADMIN sees everything; CLIENT_MANAGER only their assigned clients.
+- **Automatic alerts** — monitoring scans record alerts and skip duplicates while an
+  unresolved alert of the same type exists.
+- **RUNNING instances cannot be deleted** — `409 ActiveInstanceException`.
+- **Cost** — SMALL $50 / MEDIUM $120 / LARGE $250 per month; the forecast counts only
+  RUNNING instances.
+- **SLA** — PREMIUM 99.9% / STANDARD 99% / BASIC 95%, with a documented uptime
+  approximation.
+- **LLM diagnosis** — falls back to a rule-based answer with no API key, so the demo
+  never breaks.
+
+---
+
+## Project Structure
 
 ```
 app/
@@ -48,115 +106,20 @@ app/
 ├── config.py                # Settings, unit pricing, SLA thresholds
 ├── database.py              # SQLAlchemy engine/session
 ├── seed.py                  # Idempotent demo data
-├── models/                  # M — SQLAlchemy ORM entities (ERD implementation)
+├── models/                  # M — SQLAlchemy ORM entities
 ├── schemas/                 # V — Pydantic request/response DTOs
-├── controllers/             # C — API routers (auth, instances, monitor, alerts, clients)
-├── services/                # Business logic (instance, monitor, alert, client/cost/SLA, LLM)
+├── controllers/             # C — API routers
+├── services/                # Business logic
 └── core/                    # JWT security, auth dependencies, domain exceptions
-docs/ERD.md                  # Step 1 — ERD (mermaid) + design notes
+docs/                        # Documentation — see docs/README.md
+tests/                       # pytest integration tests
+scripts/                     # Swagger UI screenshot capture
 ```
 
 ---
 
-## API Summary
+## Contributing
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/auth/login` | Login → JWT token |
-| POST | `/api/instances` | Register instance (cost auto-set from type) |
-| GET | `/api/instances` | List — pagination (`page`,`size`), filters (`status`,`clientId`,`region`,`instanceType`), sort (`sort=-cpuUsage`) |
-| GET | `/api/instances/{id}` | Get single instance |
-| PATCH | `/api/instances/{id}/status` | Update status (+ optional cpuUsage) |
-| DELETE | `/api/instances/{id}` | Delete — **RUNNING blocked → 409 ActiveInstanceException** |
-| GET | `/api/instances/{id}/diagnosis` | **[LLM]** Cause & action for ERROR instance |
-| GET | `/api/monitor/warnings` | CPU ≥ 80% list + auto-record `CPU_HIGH` alerts |
-| GET | `/api/monitor/errors` | ERROR list + auto-record critical `ERROR_DETECTED` alerts |
-| GET | `/api/monitor/long-stopped` | STOPPED ≥ 48h list (+ `LONG_STOPPED` alerts) |
-| GET | `/api/monitor/report` | Count by status / warning count / total cost / unresolved alerts |
-| GET | `/api/alerts` | History — filters: `alertType`, `isResolved`, `dateFrom`, `dateTo` |
-| PATCH | `/api/alerts/{id}/resolve` | Mark alert resolved |
-| POST | `/api/clients` | Register client (ADMIN only) |
-| GET | `/api/clients` | List clients (scoped by role) |
-| GET | `/api/clients/{id}/instances` | Instances by client |
-| GET | `/api/clients/{id}/cost` | Current-month cost total |
-| GET | `/api/clients/{id}/cost-forecast` | Next-month forecast |
-| GET | `/api/clients/{id}/sla` | SLA uptime + violation flag |
-
----
-
-## Core Business Logic
-
-### 1. JWT Authentication & Authorization
-- `POST /api/auth/login` issues an HS256 JWT (`sub`, `email`, `role`, `exp`).
-- **ADMIN** — full access to all clients/instances; only role allowed to register clients.
-- **CLIENT_MANAGER** — every list/detail endpoint is filtered to clients where
-  `clients.managerId == member.id`; direct access to another manager's resource → **403**.
-- Passwords stored as salted PBKDF2-SHA256 hashes.
-
-### 2. Automatic Alert Recording
-- `GET /api/monitor/warnings` — for each RUNNING instance with `cpuUsage ≥ 80`, records a
-  `CPU_HIGH` alert, **skipped if an unresolved alert of that type already exists** for the instance.
-- `GET /api/monitor/errors` — records a critical `ERROR_DETECTED` alert for each ERROR instance
-  (same dedup rule).
-- `GET /api/monitor/long-stopped` — also records `LONG_STOPPED` alerts for instances stopped 48h+.
-
-### 3. Cost Forecast
-- Unit pricing: **SMALL $50 / MEDIUM $120 / LARGE $250 per month** (configurable in `config.py`).
-- Forecast = Σ (unit price × count of currently **RUNNING** instances), broken down by type.
-
-### 4. SLA Uptime
-- Ratio of RUNNING time vs total hours in the current month, compared against the plan
-  threshold: **PREMIUM 99.9% / STANDARD 99% / BASIC 95%**; below threshold → `isViolation: true`.
-- Since the schema has no status-history table, uptime is approximated per instance:
-  measured window = `max(month start, launchedAt) → now`; a RUNNING instance counts as up for
-  the whole window, a STOPPED/ERROR instance counts as up until its last status change
-  (`updatedAt`). Client uptime = average across instances. The approximation is documented in
-  `docs/ERD.md`.
-
-### 5. Instance Deletion Rules
-- `DELETE /api/instances/{id}` on a **RUNNING** instance raises `ActiveInstanceException`
-  → HTTP **409** with a structured error body. STOPPED / ERROR instances delete normally
-  (their alerts are removed with them).
-
-### Tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest -q
-```
-
-The focused Member C design notes and Swagger demo flow are in [`docs/MEMBER_C.md`](docs/MEMBER_C.md).
-
-### LLM Diagnosis (`GET /api/instances/{id}/diagnosis`)
-- Sends instance metadata + recent alert history to **Claude (`claude-opus-4-8`)** via the
-  official Anthropic SDK and returns a structured diagnosis (Probable Causes / Recommended
-  Actions / Prevention).
-- Set `ANTHROPIC_API_KEY` in `.env` to enable. Without a key the endpoint **falls back to a
-  rule-based diagnosis** (response field `source` says `"llm"` or `"rule-based"`), so the demo
-  never breaks.
-
----
-
-## Example Flow (curl)
-
-```bash
-# Login as admin
-TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@techvalley.vn","password":"admin123!"}' | python -c "import sys,json;print(json.load(sys.stdin)['accessToken'])")
-
-# High-CPU warnings (auto-records alerts)
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/monitor/warnings
-
-# Full report
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/monitor/report
-
-# Try deleting a RUNNING instance -> 409 ActiveInstanceException
-curl -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/instances/1
-
-# SLA for client 1
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/clients/1/sla
-
-# LLM diagnosis for the ERROR instance (id 5 in seed data)
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/instances/5/diagnosis
-```
+Documentation is written in **English** and changes in the **same commit** as the code
+it describes. Before changing code, read the document covering that area; the
+source-to-document mapping is in [CLAUDE.md](CLAUDE.md#documentation-rules).
