@@ -1,5 +1,8 @@
 # Step 1 — ERD Design
 
+Data model for the TechValley Cloud Instance Monitoring System: five tables implemented
+as SQLAlchemy 2.0 ORM entities in [app/models/models.py](../../app/models/models.py).
+
 ## Entity Relationship Diagram
 
 ```mermaid
@@ -75,3 +78,19 @@ erDiagram
 - **`updatedAt`** is refreshed on every status change; it drives both the *long-stopped (48h+)* detection and the SLA uptime approximation (the schema has no status-history table, so the last transition time is the best available signal).
 - **`alerts.isResolved` + `resolvedAt`** support the dedup rule: monitoring calls skip alert creation when an unresolved alert of the same type already exists for the instance.
 - **`cost_snapshots.snapshotMonth`** is stored as a `YYYY-MM` string for simple grouping and uniqueness per client-month.
+
+## Known Gaps
+
+- **No status-history table.** Only `updatedAt` records that a status changed, not the sequence of changes. This is the source of the SLA uptime approximation and its limits — see [../business-rules/SLA.md](../business-rules/SLA.md). Adding `instance_status_history(instanceId, fromStatus, toStatus, changedAt)` would make uptime exact.
+- **`cost_snapshots` is written but never read.** The seed creates one previous-month row per client; no endpoint consumes them, so month-over-month cost reporting is designed for but not implemented — see [../business-rules/COST.md](../business-rules/COST.md).
+- **No migrations.** Tables are created from the ORM metadata at startup, so a schema change means deleting `monitoring.db` rather than migrating it — see [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Alerts cascade with their instance.** Deleting an instance removes its alert history, so incident records do not outlive the resource they describe.
+
+## Related
+
+| Document | Why |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How the models fit the MVC layering |
+| [../business-rules/](../business-rules/README.md) | Rules that read and write these columns |
+| [../api/OVERVIEW.md](../api/OVERVIEW.md) | Enum values as they appear over HTTP |
+| [../demo/SEED_DATA.md](../demo/SEED_DATA.md) | Rows the seed creates in these tables |
