@@ -10,6 +10,7 @@ own README linking to the files inside it.
 | [demo/](demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | [design/](design/README.md) | Architecture, ERD, LLM feature design |
 | [testing/](testing/README.md) | Functional test suite and how to run it |
+| [performance/](performance/README.md) | Measured latency, throughput and concurrency findings |
 | [team/](team/README.md) | Per-member assignment scope |
 | [contributing/](contributing/README.md) | Commit conventions and documentation rules |
 | [screenshots/](screenshots/README.md) | Captured Swagger UI responses |
@@ -26,6 +27,7 @@ own README linking to the files inside it.
 | Change or extend the code | [design/ARCHITECTURE.md](design/ARCHITECTURE.md) → [design/ERD.md](design/ERD.md) |
 | Work on the AI diagnosis feature | [design/LLM_FEATURE.md](design/LLM_FEATURE.md) |
 | Run the tests, or add one | [testing/RUNNING_TESTS.md](testing/RUNNING_TESTS.md) → [testing/FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) |
+| Know what is slow, and why | [performance/PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) |
 | Commit a change | [contributing/COMMITS.md](contributing/COMMITS.md) |
 
 ---
@@ -64,6 +66,10 @@ own README linking to the files inside it.
 
 - [FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) — test approach, fixtures, suite catalogue, coverage, gaps
 - [RUNNING_TESTS.md](testing/RUNNING_TESTS.md) — install, run, select tests, read a failure, troubleshooting
+
+**[performance/](performance/README.md)**
+
+- [PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) — 15 measured performance findings, ranked, with fixes
 
 **[team/](team/README.md)**
 

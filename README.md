@@ -55,6 +55,7 @@ linking to the files inside it.
 | [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
 | [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
+| [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
 | [docs/team/](docs/team/README.md) | Per-member assignment scope |
 | [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
 | [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
@@ -75,6 +76,7 @@ linking to the files inside it.
 | LLM diagnosis feature | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
 | Running the tests | [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) |
 | What the tests cover | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) |
+| Performance bugs and fixes | [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md) |
 | Commit conventions | [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md) |
 | Documentation rules | [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md) |
 
