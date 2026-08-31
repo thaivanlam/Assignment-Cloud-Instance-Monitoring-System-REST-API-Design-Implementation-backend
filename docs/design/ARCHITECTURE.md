@@ -13,7 +13,7 @@ Anthropic SDK
 app/
 ├── main.py                  FastAPI app, router registration, exception handlers, startup seed
 ├── config.py                Settings, unit pricing, SLA thresholds
-├── database.py              SQLAlchemy engine, SessionLocal, get_db dependency
+├── database.py              SQLAlchemy engine, SQLite pragmas, SessionLocal, get_db dependency
 ├── seed.py                  Idempotent demo data
 ├── models/                  M — SQLAlchemy ORM entities
 ├── schemas/                 V — Pydantic request/response DTOs
@@ -115,6 +115,18 @@ receives `(text, source)`. Swapping provider or prompt touches nothing else. See
 There are no migrations. The schema is created from the ORM models, which is adequate
 for an assignment with a disposable SQLite file but would need Alembic for anything
 longer-lived — a column change today means deleting `monitoring.db`.
+
+### SQLite connection settings
+
+When `DATABASE_URL` names SQLite, `_set_sqlite_pragmas`
+([app/database.py](../../app/database.py)) runs on every new connection and sets
+`journal_mode=WAL` and `synchronous=NORMAL`. The default rollback journal locks the entire
+database file for the length of a write, which the monitoring scans — `GET`s that record
+alerts — turn into a lock every dashboard poll had to queue behind. WAL lets readers work
+from the last committed snapshot while a writer runs. WAL keeps two sidecar files,
+`monitoring.db-wal` and `monitoring.db-shm`, next to the database; both are ignored by git.
+The hook is skipped entirely for a non-SQLite `DATABASE_URL`. Background:
+[../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01).
 
 ---
 

@@ -93,7 +93,7 @@ runs each one in `run_in_threadpool`, and AnyIO's default limiter allows **40** 
 workers concurrently.
 
 The engine is created with no pool arguments
-([database.py:8](../../app/database.py#L8)), so it gets `QueuePool` defaults — measured:
+([database.py:9](../../app/database.py#L9)), so it gets `QueuePool` defaults — measured:
 
 ```
 pool: QueuePool  size 5      (+ max_overflow 10  =  15 connections)
@@ -236,7 +236,7 @@ Three statements total, regardless of how many instances match.
 **`commit()` expires the result set, so serialization re-SELECTs every row.**
 
 `SessionLocal` is built without `expire_on_commit=False`
-([database.py:9](../../app/database.py#L9)), so `db.commit()` marks every loaded object
+([database.py:10](../../app/database.py#L10)), so `db.commit()` marks every loaded object
 expired. The monitoring endpoints commit and then **return** the instances they just
 loaded — and Pydantic reading `instance.instanceName` for the response triggers a refresh
 `SELECT` for each one.

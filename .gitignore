@@ -3,5 +3,7 @@ __pycache__/
 *.pyc
 .env
 monitoring.db
+monitoring.db-wal
+monitoring.db-shm
 
 .vercel
