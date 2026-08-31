@@ -104,6 +104,34 @@ Do not mix unrelated changes into one commit because they happened at the same t
 Files you did not intend to change should stay out of the commit; stage explicitly
 rather than reaching for `git add -A`.
 
+### Every push is a sequence of commits
+
+A batch of work is never pushed as one commit. Before pushing, go through the working
+tree and cut it into the smallest logical changes that each stand on their own:
+
+1. `git status` and `git diff` — list what actually changed and group it by intent.
+2. Stage one group at a time by path — `git add app/services/cost_service.py
+   docs/business-rules/COST.md` — and commit it with its own subject and body. Use
+   `git add -p` when one file carries two unrelated changes.
+3. Repeat until the tree is clean, then push the whole sequence with a single
+   `git push`.
+
+Order the commits so that each one leaves the repository working. A `refactor:` that
+prepares the ground comes before the `feat:` that builds on it; a `test:` that only
+covers existing behaviour can go first, one that covers a new rule goes after it.
+
+```
+refactor: move alert dedup check into alert_service
+feat: add region filter to the instance list endpoint
+test: cover the region filter against the seeded regions
+```
+
+The only work that stays a single commit is a change that cannot be split without
+breaking the rule above — most often a behaviour change and the document it invalidates,
+which [DOCUMENTATION.md](DOCUMENTATION.md) requires to land together. "It was all one
+sitting" is not a reason to keep changes in one commit; neither is "the pieces are
+small".
+
 ---
 
 ## 5. Language
