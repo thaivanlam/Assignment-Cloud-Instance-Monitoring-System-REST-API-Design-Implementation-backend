@@ -24,9 +24,11 @@ role scoping and 104 functional tests.
 <br/>
 
 [**Quick Start**](#-quick-start) ·
-[**API**](#api-at-a-glance) ·
+[**API**](#-api-at-a-glance) ·
 [**Architecture**](#-architecture) ·
-[**Docs**](#documentation)
+[**Screenshots**](#-screenshots) ·
+[**Docs**](#-documentation) ·
+[**Tests**](#-tests)
 
 </div>
 
@@ -42,7 +44,7 @@ role scoping and 104 functional tests.
 | 💵 | **Cost & forecast** | `SMALL $50` / `MEDIUM $120` / `LARGE $250` per month; the forecast counts only `RUNNING` instances |
 | 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
 | 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
-| 📚 | **Documented end to end** | Nine documentation folders: API reference, business rules, ERD, walkthrough, performance findings |
+| 📚 | **Documented end to end** | Ten documentation folders: API reference, business rules, ERD, walkthrough, performance findings |
 | ✅ | **104 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
@@ -93,18 +95,8 @@ curl -s "http://127.0.0.1:8000/api/instances?sort=-cpuUsage&size=5" \
 
 </details>
 
-Then follow the guided demo: **[docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md)**.
-
-### Tests
-
-```bash
-pip install -r requirements-dev.txt
-pytest -q          # 104 functional tests — no API key, no running server
-```
-
-Details in [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md); what each
-suite asserts is in
-[docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md).
+Then follow the guided demo: **[docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md)** —
+or read the source in order: **[docs/onboarding/READING_ORDER.md](docs/onboarding/READING_ORDER.md)**.
 
 ---
 
@@ -164,27 +156,99 @@ Columns, constraints and derived fields: [docs/design/ERD.md](docs/design/ERD.md
 
 ---
 
-## Documentation
+## 🔌 API at a glance
+
+Nineteen endpoints across five routers, plus a `GET /` health check. Full detail in
+**[docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md)**.
+
+| Group | Endpoints |
+|---|---|
+| 🔑 **Auth** | `POST /api/auth/login` |
+| 🖥️ **Instances** | `POST` · `GET` `/api/instances` · `GET /{id}` · `PATCH /{id}/status` · `DELETE /{id}` · `GET /{id}/diagnosis` |
+| 📡 **Monitoring** | `GET /api/monitor/warnings` · `/errors` · `/long-stopped` · `/report` |
+| 🚨 **Alerts** | `GET /api/alerts` · `PATCH /api/alerts/{id}/resolve` |
+| 🏢 **Clients** | `POST` · `GET` `/api/clients` · `GET /{id}/instances` · `/cost` · `/cost-forecast` · `/sla` |
+
+Every list endpoint takes `page`, `size`, filters and `sort` (`-field` for descending) and
+answers in the same envelope; every error answers as `{"error": ..., "detail": ...}`. See
+[CONVENTIONS.md](docs/api/CONVENTIONS.md) and [ERRORS.md](docs/api/ERRORS.md).
+
+### Key behaviours
+
+Each rule is documented in **[docs/business-rules/](docs/business-rules/README.md)**:
+
+- 🔐 **Role scoping** — ADMIN sees everything; CLIENT_MANAGER only their assigned clients.
+- 🚨 **Automatic alerts** — monitoring scans record alerts and skip duplicates while an
+  unresolved alert of the same type exists.
+- ⛔ **RUNNING instances cannot be deleted** — `409 ActiveInstanceException`.
+- 💵 **Cost** — SMALL $50 / MEDIUM $120 / LARGE $250 per month; the forecast counts only
+  RUNNING instances.
+- 📈 **SLA** — PREMIUM 99.9% / STANDARD 99% / BASIC 95%, with a documented uptime
+  approximation.
+- 🤖 **LLM diagnosis** — falls back to a rule-based answer with no API key, so the demo
+  never breaks.
+
+---
+
+## 📸 Screenshots
+
+Captured from Swagger UI against a freshly seeded database — all 29 in
+[docs/screenshots/](docs/screenshots/README.md).
+
+| Login → token | Instances, sorted and paginated |
+|---|---|
+| <img src="docs/screenshots/02_login_admin.png" alt="Login as ADMIN returning an accessToken" width="100%"> | <img src="docs/screenshots/06_instances_list_sorted.png" alt="Instance list sorted by CPU usage" width="100%"> |
+| **LLM diagnosis** | **Monitoring report** |
+| <img src="docs/screenshots/11_instance_diagnosis_llm.png" alt="LLM diagnosis response" width="100%"> | <img src="docs/screenshots/15_monitor_report.png" alt="Monitoring summary report" width="100%"> |
+
+---
+
+## 🧪 Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q          # 104 functional tests — no API key, no running server
+```
+
+The suite drives the API over HTTP against a per-test **in-memory** database seeded with
+the same demo data, so its expected values are exact rather than approximate.
+
+| Document | Contents |
+|---|---|
+| [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) | How to run the suite |
+| [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) | What every suite asserts |
+
+⚡ Latency, throughput and concurrency were measured separately — 15 findings, three rated
+critical: [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md).
+
+---
+
+## 📚 Documentation
 
 Full documentation lives in **[docs/](docs/README.md)**. Each folder has its own README
 linking to the files inside it.
 
 | Folder | Contents |
 |---|---|
-| [docs/api/](docs/api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
-| [docs/business-rules/](docs/business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
-| [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
-| [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
-| [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
-| [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
-| [docs/team/](docs/team/README.md) | Per-member assignment scope |
-| [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
-| [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
+| 🧭 [docs/onboarding/](docs/onboarding/README.md) | How to read this codebase for the first time, function by function |
+| 📘 [docs/api/](docs/api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
+| 📗 [docs/business-rules/](docs/business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
+| 📙 [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
+| 📐 [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
+| 🧪 [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
+| ⚡ [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
+| 👥 [docs/team/](docs/team/README.md) | Per-member assignment scope |
+| 🤝 [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
+| 📸 [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
 
-### Direct links
+<details open>
+<summary><b>Direct links</b></summary>
+
+<br/>
 
 | Topic | Document |
 |---|---|
+| Reading order for new contributors | [docs/onboarding/READING_ORDER.md](docs/onboarding/READING_ORDER.md) |
 | API endpoint reference | [docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md) |
 | Authentication and JWT | [docs/api/AUTHENTICATION.md](docs/api/AUTHENTICATION.md) |
 | Pagination, filtering, sorting | [docs/api/CONVENTIONS.md](docs/api/CONVENTIONS.md) |
@@ -201,62 +265,44 @@ linking to the files inside it.
 | Commit conventions | [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md) |
 | Documentation rules | [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md) |
 
----
-
-## API at a glance
-
-Nineteen endpoints across five routers, plus a `GET /` health check. Full detail in
-[docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md).
-
-| Group | Endpoints |
-|---|---|
-| Auth | `POST /api/auth/login` |
-| Instances | `POST` / `GET` `/api/instances`, `GET` `/{id}`, `PATCH` `/{id}/status`, `DELETE` `/{id}`, `GET` `/{id}/diagnosis` |
-| Monitoring | `GET /api/monitor/warnings` · `/errors` · `/long-stopped` · `/report` |
-| Alerts | `GET /api/alerts`, `PATCH /api/alerts/{id}/resolve` |
-| Clients | `POST` / `GET` `/api/clients`, `GET` `/{id}/instances` · `/cost` · `/cost-forecast` · `/sla` |
-
-Key behaviours, each documented in [docs/business-rules/](docs/business-rules/README.md):
-
-- **Role scoping** — ADMIN sees everything; CLIENT_MANAGER only their assigned clients.
-- **Automatic alerts** — monitoring scans record alerts and skip duplicates while an
-  unresolved alert of the same type exists.
-- **RUNNING instances cannot be deleted** — `409 ActiveInstanceException`.
-- **Cost** — SMALL $50 / MEDIUM $120 / LARGE $250 per month; the forecast counts only
-  RUNNING instances.
-- **SLA** — PREMIUM 99.9% / STANDARD 99% / BASIC 95%, with a documented uptime
-  approximation.
-- **LLM diagnosis** — falls back to a rule-based answer with no API key, so the demo
-  never breaks.
+</details>
 
 ---
 
-## Project Structure
+## 🗂️ Project Structure
 
 ```
 app/
-├── main.py                  # FastAPI app, routers, exception handlers, startup seed
-├── config.py                # Settings, unit pricing, SLA thresholds
-├── database.py              # SQLAlchemy engine/session
-├── seed.py                  # Idempotent demo data
-├── models/                  # M — SQLAlchemy ORM entities
-├── schemas/                 # V — Pydantic request/response DTOs
-├── controllers/             # C — API routers
-├── services/                # Business logic
-└── core/                    # JWT security, auth dependencies, domain exceptions
-docs/                        # Documentation — see docs/README.md
-tests/                       # pytest integration tests
-scripts/                     # Swagger UI screenshot capture
+├── main.py              # FastAPI app, routers, exception handlers, startup seed
+├── config.py            # Settings, unit pricing, SLA thresholds
+├── database.py          # SQLAlchemy engine/session
+├── seed.py              # Idempotent demo data
+├── models/              # M — SQLAlchemy ORM entities
+├── schemas/             # V — Pydantic request/response DTOs
+├── controllers/         # C — API routers
+├── services/            # Business logic — monitoring, alerts, cost, SLA, LLM
+└── core/                # JWT security, auth dependencies, domain exceptions
+docs/                    # Documentation — see docs/README.md
+tests/                   # pytest functional tests
+scripts/                 # Swagger UI screenshot capture
 ```
 
 ---
 
-## Contributing
+## 🤝 Contributing
 
-Documentation is written in **English** and changes in the **same commit** as the code
-it describes. Before changing code, read the document covering that area — the
+Documentation is written in **English** and changes in the **same commit** as the code it
+describes. Before changing code, read the document covering that area — the
 source-to-document mapping is in
 [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md).
 
-Commit subjects carry a type prefix — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
+Commit subjects carry a type prefix — `feat:` · `fix:` · `docs:` · `refactor:` · `test:`.
 See [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md).
+
+---
+
+<div align="center">
+
+Built for the **TechValley Developer Track** assignment · [MIT License](LICENSE)
+
+</div>
