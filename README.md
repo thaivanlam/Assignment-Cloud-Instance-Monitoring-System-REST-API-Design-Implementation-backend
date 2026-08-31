@@ -239,6 +239,7 @@ linking to the files inside it.
 | ⚡ [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
 | 👥 [docs/team/](docs/team/README.md) | Per-member assignment scope |
 | 🤝 [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
+| 🗓️ [docs/changelog/](docs/changelog/README.md) | What changed in this repository, and when |
 | 📸 [docs/screenshots/](docs/screenshots/README.md) | Captured Swagger UI responses |
 
 <details open>
@@ -264,6 +265,7 @@ linking to the files inside it.
 | Performance bugs and fixes | [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md) |
 | Commit conventions | [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md) |
 | Documentation rules | [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md) |
+| Change history | [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md) |
 
 </details>
 

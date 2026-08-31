@@ -14,6 +14,7 @@ own README linking to the files inside it.
 | [performance/](performance/README.md) | Measured latency, throughput and concurrency findings |
 | [team/](team/README.md) | Per-member assignment scope |
 | [contributing/](contributing/README.md) | Commit conventions and documentation rules |
+| [changelog/](changelog/README.md) | What changed in this repository, and when |
 | [screenshots/](screenshots/README.md) | Captured Swagger UI responses |
 
 ---
@@ -31,6 +32,7 @@ own README linking to the files inside it.
 | Run the tests, or add one | [testing/RUNNING_TESTS.md](testing/RUNNING_TESTS.md) → [testing/FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) |
 | Know what is slow, and why | [performance/PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) |
 | Commit a change | [contributing/COMMITS.md](contributing/COMMITS.md) |
+| See what changed, and when | [changelog/CHANGELOG.md](changelog/CHANGELOG.md) |
 
 ---
 
@@ -85,6 +87,10 @@ own README linking to the files inside it.
 
 - [COMMITS.md](contributing/COMMITS.md) — commit prefixes, subject and body style, commit scope
 - [DOCUMENTATION.md](contributing/DOCUMENTATION.md) — documentation rules and source → document mapping
+
+**[changelog/](changelog/README.md)**
+
+- [CHANGELOG.md](changelog/CHANGELOG.md) — dated record of every noticeable change, newest first, each entry citing its commit
 
 ---
 
