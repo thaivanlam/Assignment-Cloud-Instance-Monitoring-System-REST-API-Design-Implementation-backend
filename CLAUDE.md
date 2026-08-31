@@ -72,6 +72,14 @@ covering both — the documentation rule above requires them to land together, s
 split the doc update into a separate `docs:` commit. Use `docs:` only when nothing
 outside `docs/`, `README.md`, or `CLAUDE.md` changes.
 
+**Split every push into multiple commits.** Work is never committed as one batch. Before
+committing, break the working tree into a sequence of logical changes, stage each one
+explicitly (`git add <paths>`, never `git add -A`), commit it with its own message, then
+push the whole sequence at once. Order the commits so each one leaves the repository
+working on its own — a `refactor:` that prepares the ground comes before the `feat:` that
+uses it. The only work that stays a single commit is a change that cannot be split
+without breaking that rule, such as a behaviour change and the document it invalidates.
+
 Subject and body style, and how to scope a commit:
 [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md).
 
