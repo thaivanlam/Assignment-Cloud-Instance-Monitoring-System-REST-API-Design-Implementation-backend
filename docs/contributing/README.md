@@ -28,6 +28,7 @@ followed by a `docs:` commit.
 
 | Document | Why |
 |---|---|
+| [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) | Reading the code before changing it |
 | [../README.md](../README.md) | Documentation index — where each document lives |
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | Which layer a change belongs in |
 | [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the tests before you commit |

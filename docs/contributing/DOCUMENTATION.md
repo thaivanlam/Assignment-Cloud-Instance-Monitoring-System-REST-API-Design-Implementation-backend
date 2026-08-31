@@ -71,6 +71,7 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 | `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md) |
 | `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) |
 | Project layout or new module | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
+| A function under `app/**` is added, removed, renamed or moved | [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — it walks the functions in order and cites their line numbers |
 
 A change that alters observable behaviour also belongs in
 [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if it invalidates a step or an expected

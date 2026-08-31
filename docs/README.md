@@ -5,6 +5,7 @@ own README linking to the files inside it.
 
 | Folder | Contents |
 |---|---|
+| [onboarding/](onboarding/README.md) | How to read this codebase for the first time |
 | [api/](api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
 | [business-rules/](business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
 | [demo/](demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
@@ -21,6 +22,7 @@ own README linking to the files inside it.
 
 | If you want to… | Read |
 |---|---|
+| Read the source for the first time | [onboarding/READING_ORDER.md](onboarding/READING_ORDER.md) |
 | Run the API and click through it | [demo/README.md](demo/README.md) → [demo/WALKTHROUGH.md](demo/WALKTHROUGH.md) |
 | Call an endpoint from client code | [api/AUTHENTICATION.md](api/AUTHENTICATION.md) → [api/ENDPOINTS.md](api/ENDPOINTS.md) |
 | Understand *why* a response looks that way | [business-rules/README.md](business-rules/README.md) |
@@ -33,6 +35,10 @@ own README linking to the files inside it.
 ---
 
 ## Full file index
+
+**[onboarding/](onboarding/README.md)**
+
+- [READING_ORDER.md](onboarding/READING_ORDER.md) — function-by-function reading path through `app/`, in call-dependency order
 
 **[api/](api/README.md)**
 
