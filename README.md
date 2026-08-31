@@ -23,8 +23,9 @@ role scoping and 104 functional tests.
 
 <br/>
 
-[**Quick Start**](#quick-start) ·
+[**Quick Start**](#-quick-start) ·
 [**API**](#api-at-a-glance) ·
+[**Architecture**](#-architecture) ·
 [**Docs**](#documentation)
 
 </div>
@@ -46,36 +47,120 @@ role scoping and 104 functional tests.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
-# 1. Create a virtualenv and install dependencies
+# 1 · Create a virtualenv and install dependencies
 python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/macOS: source .venv/bin/activate)
 pip install -r requirements.txt
 
-# 2. (Optional) configure — defaults work out of the box
+# 2 · (Optional) configure — defaults work out of the box
 copy .env.example .env
 
-# 3. Run
+# 3 · Run
 uvicorn app.main:app --reload
 ```
 
-- Swagger UI: **http://127.0.0.1:8000/docs**
-- `monitoring.db` is created and **seeded automatically** on first run — 3 members,
-  10 clients, 15 instances, cost snapshots.
-- Log in with `admin@techvalley.vn` / `admin123!`, then follow
-  [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md).
+> 🔗 **Swagger UI → <http://127.0.0.1:8000/docs>**
+>
+> `monitoring.db` is created and **seeded automatically** on first run —
+> 3 members, 10 clients, 15 instances, cost snapshots.
+
+### Log in
+
+| Role | Email | Password | Sees |
+|---|---|---|---|
+| `ADMIN` | `admin@techvalley.vn` | `admin123!` | All 10 clients, all 15 instances |
+| `CLIENT_MANAGER` | `lam@techvalley.vn` | `manager123!` | Clients **1–5** |
+| `CLIENT_MANAGER` | `minh@techvalley.vn` | `manager123!` | Clients **6–10** |
+
+<details>
+<summary><b>Two-command smoke test with curl</b></summary>
+
+<br/>
 
 ```bash
-# Tests — 104 functional tests, no API key or running server needed
+# Get a token
+curl -s -X POST http://127.0.0.1:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d "{\"email\":\"admin@techvalley.vn\",\"password\":\"admin123!\"}"
+
+# Use it
+curl -s "http://127.0.0.1:8000/api/instances?sort=-cpuUsage&size=5" \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+</details>
+
+Then follow the guided demo: **[docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md)**.
+
+### Tests
+
+```bash
 pip install -r requirements-dev.txt
-pytest -q
+pytest -q          # 104 functional tests — no API key, no running server
 ```
 
 Details in [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md); what each
 suite asserts is in
 [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md).
+
+---
+
+## 🧭 Architecture
+
+MVC layering — a request never skips a layer, and each business rule lives in exactly one
+place.
+
+```mermaid
+flowchart LR
+    U["Client · Swagger UI"] -->|"JSON + Bearer JWT"| CTRL
+
+    subgraph APP["FastAPI application"]
+        direction LR
+        CTRL["controllers/<br/>APIRouter · HTTP only"]
+        SVC["services/<br/>business logic"]
+        MOD["models/<br/>SQLAlchemy 2.0 ORM"]
+        SCH["schemas/<br/>Pydantic v2 DTOs"]
+        CORE["core/<br/>JWT · deps · exceptions"]
+
+        CTRL --> SVC --> MOD
+        SCH -.->|"validate · serialise"| CTRL
+        CORE -.->|"authenticate · scope"| CTRL
+    end
+
+    MOD --> DB[("SQLite<br/>monitoring.db")]
+    SVC -->|"diagnosis"| LLM["Anthropic Claude<br/>rule-based fallback"]
+```
+
+| Layer | Directory | Responsibility |
+|---|---|---|
+| **M** | [app/models/](app/models/) | SQLAlchemy 2.0 ORM entities — five tables |
+| **V** | [app/schemas/](app/schemas/) | Pydantic v2 request/response DTOs |
+| **C** | [app/controllers/](app/controllers/) | Routers — parse, delegate, return |
+| — | [app/services/](app/services/) | Monitoring, alerts, cost, SLA, LLM |
+| — | [app/core/](app/core/) | JWT security, auth dependencies, domain exceptions |
+
+Full write-up: [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) ·
+data model: [docs/design/ERD.md](docs/design/ERD.md).
+
+<details>
+<summary><b>Data model at a glance</b></summary>
+
+<br/>
+
+```mermaid
+erDiagram
+    members ||--o{ clients : "manages"
+    clients ||--o{ instances : "owns"
+    clients ||--o{ cost_snapshots : "has"
+    instances ||--o{ alerts : "raises"
+```
+
+Columns, constraints and derived fields: [docs/design/ERD.md](docs/design/ERD.md).
+
+</details>
 
 ---
 
