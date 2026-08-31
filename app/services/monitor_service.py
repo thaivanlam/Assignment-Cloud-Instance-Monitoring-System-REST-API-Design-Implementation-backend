@@ -30,6 +30,17 @@ def _record_alert(db: Session, instance: Instance, alert_type: AlertType, messag
     return True
 
 
+def _commit_if_recorded(db: Session, recorded: bool) -> None:
+    """Commits a scan only when it actually opened a new alert.
+
+    A scan that finds nothing new is a pure read, and committing one would still take
+    SQLite's write lock and fsync — serialising every other request behind a dashboard
+    poll that changed nothing. Dedup means most polls are exactly that case.
+    """
+    if recorded:
+        db.commit()
+
+
 def check_warnings(db: Session, client_ids: list[int] | None) -> list[Instance]:
     """CPU >= 80% instances; auto-records a CPU_HIGH alert for each (skip if
     an unresolved CPU_HIGH alert already exists)."""
@@ -41,13 +52,14 @@ def check_warnings(db: Session, client_ids: list[int] | None) -> list[Instance]:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
     instances = query.order_by(Instance.id).all()
 
+    recorded = False
     for inst in instances:
-        _record_alert(
+        recorded = _record_alert(
             db, inst, AlertType.CPU_HIGH,
             f"CPU usage {inst.cpuUsage:.1f}% >= {settings.CPU_WARNING_THRESHOLD:.0f}% "
             f"on instance '{inst.instanceName}' ({inst.region})",
-        )
-    db.commit()
+        ) or recorded
+    _commit_if_recorded(db, recorded)
     return instances
 
 
@@ -58,12 +70,13 @@ def check_errors(db: Session, client_ids: list[int] | None) -> list[Instance]:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
     instances = query.order_by(Instance.id).all()
 
+    recorded = False
     for inst in instances:
-        _record_alert(
+        recorded = _record_alert(
             db, inst, AlertType.ERROR_DETECTED,
             f"[CRITICAL] Instance '{inst.instanceName}' ({inst.region}) is in ERROR state",
-        )
-    db.commit()
+        ) or recorded
+    _commit_if_recorded(db, recorded)
     return instances
 
 
@@ -80,14 +93,15 @@ def check_long_stopped(db: Session, client_ids: list[int] | None) -> list[Instan
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
     instances = query.order_by(Instance.id).all()
 
+    recorded = False
     for inst in instances:
         hours = (now - inst.updatedAt).total_seconds() / 3600
-        _record_alert(
+        recorded = _record_alert(
             db, inst, AlertType.LONG_STOPPED,
             f"Instance '{inst.instanceName}' has been STOPPED for {hours:.0f} hours "
             f"(>= {settings.LONG_STOPPED_HOURS}h)",
-        )
-    db.commit()
+        ) or recorded
+    _commit_if_recorded(db, recorded)
     return instances
 
 

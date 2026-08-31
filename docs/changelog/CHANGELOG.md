@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-08-31](#2026-08-31--perf-01-fixed-monitoring-polls-no-longer-lock-the-database) | PERF-01 fixed | Scans commit only when they record; SQLite runs in WAL |
 | [2026-08-31](#2026-08-31--onboarding-path-and-change-history) | Onboarding path and change history | A reading order through `app/`, and this changelog |
 | [2026-08-31](#2026-08-31--readme-as-a-landing-page) | README as a landing page | Badge header, architecture diagram, screenshot gallery |
 | [2026-08-29](#2026-08-29--performance-review) | Performance review | 15 measured findings, three critical |
@@ -28,6 +29,52 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-08-31 — PERF-01 fixed: monitoring polls no longer lock the database
+
+The first performance finding to be closed since the review landed on 2026-08-29. No API
+contract changed and no endpoint was added — all 104 tests pass unchanged.
+
+### Fixed
+
+- **A monitoring scan commits only when it recorded an alert.** `check_warnings`,
+  `check_errors` and `check_long_stopped` called `db.commit()` unconditionally, including
+  on the repeat polls where the dedup guard had inserted nothing. They now collect what
+  `_record_alert` returns and pass it to the new `_commit_if_recorded`
+  ([../../app/services/monitor_service.py](../../app/services/monitor_service.py)).
+  Measured over one scan plus ten repeat polls of each endpoint: 11 commits each before,
+  1 each after. The auto-record-on-scan behaviour documented in
+  [../business-rules/ALERTING.md](../business-rules/ALERTING.md) is unchanged — a scan
+  that finds something new still writes it.
+- **SQLite connections run in WAL mode with `synchronous=NORMAL`**, set by
+  `_set_sqlite_pragmas` on the engine's `connect` event
+  ([../../app/database.py](../../app/database.py)). Under the previous rollback journal a
+  write locked the whole database file and fsynced on commit, so every writing poll
+  stalled every concurrent reader. The hook is skipped for a non-SQLite `DATABASE_URL`.
+- **`.gitignore`** extended with `monitoring.db-wal` and `monitoring.db-shm`, the sidecar
+  files WAL keeps beside the database.
+
+Deliberately not done: moving alert recording off the read path onto a
+`POST /api/monitor/scan` or a background task, the third fix
+[../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01)
+proposed. It would add an endpoint and drop the auto-record-on-scan design, both out of
+scope. The reasoning is recorded in that finding.
+
+### Documentation
+
+- **[../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md)** — the
+  summary table gained a **Status** column, PERF-01 gained a "the fix that landed" section
+  with the before/after commit counts, and the measurement method now covers how those
+  counts were taken.
+- **[../business-rules/ALERTING.md](../business-rules/ALERTING.md)** — § 2 states the
+  commit-only-when-recorded rule and why it is invisible through the API.
+- **[../design/ARCHITECTURE.md](../design/ARCHITECTURE.md)** — a "SQLite connection
+  settings" subsection under Startup.
+- **[../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md)** — two new stops for
+  the two new functions, 75 → 77, with the numbering and cited line numbers carried
+  through.
 
 ---
 
@@ -86,7 +133,9 @@ Three commits reworking the root [README.md](../../README.md) only. No source ch
   [README.md](../../README.md). `700854e`
 
 Nothing here is a functional defect — the suite passes and the API returns correct answers
-throughout. No fix has been applied yet; the findings are recorded, not resolved.
+throughout. No fix was applied that day; the findings were recorded, not resolved. PERF-01
+was fixed two days later — see
+[2026-08-31 — PERF-01 fixed](#2026-08-31--perf-01-fixed-monitoring-polls-no-longer-lock-the-database).
 
 ---
 

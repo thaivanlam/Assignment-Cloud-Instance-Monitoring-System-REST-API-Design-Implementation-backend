@@ -43,6 +43,14 @@ duplicate guard below is what keeps it harmless.
 `GET /api/monitor/report` is the exception: it is purely read-only and never writes an
 alert.
 
+**A scan commits only when it recorded something.** Because of the duplicate guard below,
+a repeat poll normally inserts nothing, and such a scan now ends without a commit at all —
+it behaves as the pure read it effectively is. Only a scan that opened at least one new
+alert writes. This is invisible through the API (same instances, same alerts, same
+ordering) and exists because an empty commit still took an exclusive lock on the whole
+SQLite database file:
+[../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01).
+
 Each scan is scoped to the caller's accessible clients, so a `CLIENT_MANAGER` running a
 scan only ever generates alerts for their own clients' instances
 ([AUTHORIZATION.md](AUTHORIZATION.md)).
@@ -127,6 +135,7 @@ report contents.
 | Document | Why |
 |---|---|
 | [INSTANCE_LIFECYCLE.md](INSTANCE_LIFECYCLE.md) | Why `updatedAt` is trustworthy |
+| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Why a scan that records nothing does not commit |
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | Monitoring and alert endpoint shapes |
 | [../team/MEMBER_C.md](../team/MEMBER_C.md) | Assignment scope for monitoring |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Demonstrating dedup by scanning twice |

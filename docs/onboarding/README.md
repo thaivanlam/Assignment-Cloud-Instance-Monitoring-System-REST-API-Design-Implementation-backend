@@ -4,7 +4,7 @@ How to read this codebase for the first time.
 
 | Document | Contents |
 |---|---|
-| [READING_ORDER.md](READING_ORDER.md) | A function-by-function reading path through `app/` — 10 stages, 75 numbered stops, in call-dependency order |
+| [READING_ORDER.md](READING_ORDER.md) | A function-by-function reading path through `app/` — 10 stages, 77 numbered stops, in call-dependency order |
 
 ---
 
