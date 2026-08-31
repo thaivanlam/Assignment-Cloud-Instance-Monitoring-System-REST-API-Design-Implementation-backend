@@ -1,12 +1,48 @@
-# TechValley — Cloud Instance Monitoring System
+<div align="center">
 
-Internal monitoring system replacing manual Excel tracking of cloud instances for 10
-client companies. Built for the TechValley Developer Track assignment.
+# ☁️ TechValley — Cloud Instance Monitoring System
 
-**Stack:** Python · FastAPI · SQLAlchemy (SQLite) · Pydantic v2 · JWT (PyJWT) ·
-Swagger/OpenAPI · Anthropic Claude (LLM diagnosis)
-**Architecture:** MVC — `models/` (data), `schemas/` (DTO), `controllers/` (routing),
-`services/` (business logic)
+**A REST API that replaces the Excel spreadsheet 10 client companies were tracked in.**
+
+Instances, alerts, cost, SLA and an LLM-powered diagnosis endpoint — behind JWT auth,
+role scoping and 104 functional tests.
+
+<br/>
+
+[![Python](https://img.shields.io/badge/Python-3.14%20tested-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00?style=for-the-badge&logo=sqlalchemy&logoColor=white)](https://docs.sqlalchemy.org/en/20/)
+[![Pydantic](https://img.shields.io/badge/Pydantic-v2-E92063?style=for-the-badge&logo=pydantic&logoColor=white)](https://docs.pydantic.dev/latest/)
+
+[![JWT](https://img.shields.io/badge/Auth-JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)](docs/api/AUTHENTICATION.md)
+[![SQLite](https://img.shields.io/badge/DB-SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](docs/design/ERD.md)
+[![Claude](https://img.shields.io/badge/LLM-Claude-D97757?style=flat-square&logo=anthropic&logoColor=white)](docs/design/LLM_FEATURE.md)
+[![Tests](https://img.shields.io/badge/tests-104%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
+[![Endpoints](https://img.shields.io/badge/endpoints-19%20%2B%20health-44CC11?style=flat-square&logo=swagger&logoColor=white)](docs/api/ENDPOINTS.md)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+
+<br/>
+
+[**Quick Start**](#quick-start) ·
+[**API**](#api-at-a-glance) ·
+[**Docs**](#documentation)
+
+</div>
+
+---
+
+## ✨ Highlights
+
+|  | Feature | What it does |
+|:--:|---|---|
+| 🔐 | **JWT auth + role scoping** | `ADMIN` sees everything; `CLIENT_MANAGER` only their assigned clients — enforced in one dependency, not per endpoint |
+| 🖥️ | **Instance lifecycle** | Create, list, filter, sort, paginate, change status; a `RUNNING` instance cannot be deleted (`409`) |
+| 🚨 | **Automatic alerting** | Monitoring scans raise `CPU_HIGH`, `ERROR_DETECTED` and `LONG_STOPPED` alerts, and skip duplicates while one is unresolved |
+| 💵 | **Cost & forecast** | `SMALL $50` / `MEDIUM $120` / `LARGE $250` per month; the forecast counts only `RUNNING` instances |
+| 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
+| 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
+| 📚 | **Documented end to end** | Nine documentation folders: API reference, business rules, ERD, walkthrough, performance findings |
+| ✅ | **104 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
 
