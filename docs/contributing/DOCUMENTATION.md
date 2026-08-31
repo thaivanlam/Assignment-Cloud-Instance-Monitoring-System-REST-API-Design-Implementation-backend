@@ -71,6 +71,8 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 | `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md) |
 | `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) |
 | Project layout or new module | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
+| A function under `app/**` is added, removed, renamed or moved | [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — it walks the functions in order and cites their line numbers |
+| Anything a reader would notice — an endpoint, a status code, a rule, a document | [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) — one entry per change, in the same commit ([how to word it](../changelog/CHANGELOG.md#adding-an-entry)) |
 
 A change that alters observable behaviour also belongs in
 [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if it invalidates a step or an expected
@@ -99,6 +101,7 @@ number there.
 |---|---|
 | [COMMITS.md](COMMITS.md) | Commit prefixes and message structure |
 | [README.md](README.md) | Contributing index |
+| [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) | Where the change itself gets recorded |
 | [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the suite before you commit |
 | [../README.md](../README.md) | Documentation index |
 | [../../CLAUDE.md](../../CLAUDE.md) | Condensed rules loaded automatically by Claude Code |
