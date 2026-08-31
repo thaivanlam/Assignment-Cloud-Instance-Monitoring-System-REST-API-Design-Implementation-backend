@@ -1,7 +1,8 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt.
+findings, ranked by the load at which they start to hurt. One — [PERF-01](#perf-01) — has
+since been fixed; the **Status** column below says which are still open.
 
 Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
@@ -15,23 +16,23 @@ challenged.
 
 ## Summary
 
-| ID | Finding | Where | Severity |
-|---|---|---|---|
-| [PERF-01](#perf-01) | Monitoring polls take an exclusive write lock on the whole database | `services/monitor_service.py` | Critical |
-| [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical |
-| [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical |
-| [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High |
-| [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High |
-| [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High |
-| [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High |
-| [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium |
-| [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium |
-| [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium |
-| [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium |
-| [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium |
-| [PERF-13](#perf-13) | PBKDF2 at 260,000 iterations dominates the login path | `core/security.py` | Low (by design) |
-| [PERF-14](#perf-14) | A new Anthropic HTTP client is built per diagnosis request | `services/llm_service.py` | Low |
-| [PERF-15](#perf-15) | `create_all` and the seed probe run on every startup | `main.py`, `seed.py` | Low |
+| ID | Finding | Where | Severity | Status |
+|---|---|---|---|---|
+| [PERF-01](#perf-01) | Monitoring polls take an exclusive write lock on the whole database | `services/monitor_service.py` | Critical | **Fixed** |
+| [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical | Open |
+| [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | Open |
+| [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | Open |
+| [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | Open |
+| [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | Open |
+| [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | Open |
+| [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | Open |
+| [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | Open |
+| [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | Open |
+| [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | Open |
+| [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium | Open |
+| [PERF-13](#perf-13) | PBKDF2 at 260,000 iterations dominates the login path | `core/security.py` | Low (by design) | Won't fix |
+| [PERF-14](#perf-14) | A new Anthropic HTTP client is built per diagnosis request | `services/llm_service.py` | Low | Open |
+| [PERF-15](#perf-15) | `create_all` and the seed probe run on every startup | `main.py`, `seed.py` | Low | Open |
 
 ---
 
@@ -40,15 +41,17 @@ challenged.
 ### PERF-01
 
 **Every monitoring poll takes an exclusive write lock on the whole database.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed) at the end of this finding.
 
 `GET /api/monitor/warnings`, `/errors` and `/long-stopped` are read-shaped endpoints that
-`INSERT` alerts and then call `db.commit()` unconditionally —
-[monitor_service.py:50](../../app/services/monitor_service.py#L50),
-[:66](../../app/services/monitor_service.py#L66),
-[:90](../../app/services/monitor_service.py#L90). The commit fires even when
-`_record_alert` recorded nothing.
+`INSERT` alerts and then called `db.commit()` **unconditionally** —
+[monitor_service.py](../../app/services/monitor_service.py). The commit fired even when
+`_record_alert` recorded nothing, which after the first scan is the normal case: the
+dedup guard ([../business-rules/ALERTING.md](../business-rules/ALERTING.md)) means a
+repeat poll inserts nothing at all.
 
-The engine runs on SQLite defaults. Measured against the real `monitoring.db`:
+The engine ran on SQLite defaults. Measured against the real `monitoring.db` before the
+fix:
 
 ```
 journal_mode = delete
@@ -61,26 +64,58 @@ row or a table, and `synchronous=FULL` fsyncs on every commit. Concurrent reader
 `SQLITE_BUSY` and block for up to 5 seconds before failing.
 
 This is the worst possible shape for a monitoring API: the three endpoints a dashboard
-polls most often are the three that serialize every other request in the system.
+polls most often were the three that serialized every other request in the system.
 
-**Why it matters.** A dashboard refreshing every 10 seconds turns a read-mostly workload
-into a write-mostly one, and each write stalls all readers for the duration of an fsync.
+**Why it mattered.** A dashboard refreshing every 10 seconds turned a read-mostly workload
+into a write-mostly one, and each write stalled all readers for the duration of an fsync.
 
-**Fix.**
+#### The fix that landed
 
-1. Commit only when something changed — `_record_alert` already returns `True`/`False`,
-   so the return value just needs to be collected and checked.
-2. Enable WAL and relax the sync mode on connect, so readers never block on a writer:
-   ```python
-   @event.listens_for(engine, "connect")
-   def _sqlite_pragmas(dbapi_conn, _):
-       cur = dbapi_conn.cursor()
-       cur.execute("PRAGMA journal_mode=WAL")
-       cur.execute("PRAGMA synchronous=NORMAL")
-       cur.close()
+Two of the three fixes originally proposed here were applied; the third was deliberately
+not.
+
+1. **Commit only when something changed.** `_record_alert` already returned `True`/`False`,
+   so the three scans now collect that and hand it to `_commit_if_recorded`
+   ([monitor_service.py:33](../../app/services/monitor_service.py#L33)). A scan that opens
+   no new alert never commits, and never takes a write lock.
+
+2. **WAL and a relaxed sync mode**, set on every SQLite connection by `_set_sqlite_pragmas`
+   ([database.py:16](../../app/database.py#L16)):
+
    ```
-3. Longer term, take alert recording off the read path entirely — a `POST /api/monitor/scan`
-   or a background task, with the three `GET`s becoming pure reads.
+   journal_mode = wal
+   synchronous  = 1   (NORMAL)
+   busy_timeout = 5000
+   ```
+
+   Readers now run against the last committed snapshot while a writer works, so the scan
+   that *does* record an alert no longer blocks them either. The pragmas are guarded by
+   `IS_SQLITE`, so a non-SQLite `DATABASE_URL` is untouched. WAL leaves `monitoring.db-wal`
+   and `monitoring.db-shm` beside the database file; both are in `.gitignore`.
+
+3. **Taking alert recording off the read path** — a `POST /api/monitor/scan` or a
+   background task, with the three `GET`s becoming pure reads — was **not** done. It adds
+   an endpoint and removes the auto-record-on-scan behaviour that
+   [../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts)
+   documents as a deliberate concession to the assignment's shape, and both are out of
+   scope. The `GET`s still write; they just no longer write *nothing* at the cost of a
+   global lock.
+
+Measured with the same `TestClient` harness as the rest of this document, one scan
+followed by ten repeat polls of each endpoint:
+
+| Endpoint | Commits before | Commits after |
+|---|---|---|
+| `/api/monitor/warnings` (4 instances) | 11 | 1 |
+| `/api/monitor/errors` (2 instances) | 11 | 1 |
+| `/api/monitor/long-stopped` (3 instances) | 11 | 1 |
+
+The first scan still commits — it has real alerts to write. Every poll after it is a pure
+read. All 104 functional tests pass unchanged.
+
+What this does **not** fix: the scans still issue one dedup `SELECT` per instance
+([PERF-05](#perf-05)), and the commit that does happen still expires the result set
+([PERF-06](#perf-06)).
 
 ---
 
@@ -279,7 +314,7 @@ it and nothing ever prunes it — and it backs the least bounded response in the
 
 `build_report` compounds it: it materialises the full unresolved list and then uses it
 only for `len(unresolved)` **and** ships the whole thing in the response body
-([monitor_service.py:120](../../app/services/monitor_service.py#L120)).
+([monitor_service.py:134](../../app/services/monitor_service.py#L134)).
 
 **Fix.** Reuse the `PageResponse[T]` and `page`/`size` convention that
 `GET /api/instances` already established, so this is a consistency fix as much as a
@@ -471,7 +506,7 @@ Ordered by benefit per unit of risk, not by severity.
 |---|---|---|---|
 | 1 | Add the missing indexes | [PERF-04](#perf-04) | None — additive |
 | 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low |
-| 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low |
+| 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
 | 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low |
 | 5 | Timeout and retry cap on the Anthropic client | [PERF-03](#perf-03) | Low |
 | 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule |
@@ -508,7 +543,14 @@ against the seeded schema.
 
 **Engine and SQLite settings** — read from the real `monitoring.db` engine:
 `type(engine.pool).__name__`, `engine.pool.size()`, and `PRAGMA journal_mode` /
-`synchronous` / `busy_timeout`.
+`synchronous` / `busy_timeout`. The journal and sync figures quoted under
+[PERF-01](#perf-01) are the pre-fix ones; the same three pragmas now read `wal` / `1` /
+`5000`.
+
+**Commit counts** — a `commit` event listener on the engine
+(`@event.listens_for(engine, "commit")`), counting commits while driving one scan followed
+by ten repeat polls of each monitoring endpoint through `TestClient` as `ADMIN`. This is
+what the before/after table under [PERF-01](#perf-01) reports.
 
 **SDK defaults** — read from the installed package, `anthropic 0.120.2`:
 `anthropic._constants.DEFAULT_TIMEOUT` and `DEFAULT_MAX_RETRIES`.
@@ -535,3 +577,4 @@ observed failures.
 | [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention [PERF-07](#perf-07) would extend |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Why none of these are caught today |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Updating this document alongside a fix |
+| [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) | When each fix landed |

@@ -5,7 +5,7 @@ it would take to fix.
 
 | Document | Contents |
 |---|---|
-| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a suggested order of work; the measurement method |
+| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed; a suggested order of work; the measurement method |
 
 ## The short version
 
@@ -13,9 +13,12 @@ Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional on
 104 tests pass and the API returns correct answers throughout. Three findings are rated
 critical:
 
-- **PERF-01** — the three `/api/monitor/*` endpoints are `GET`s that write and commit, and
-  SQLite runs with a rollback journal, so every dashboard poll takes an exclusive lock on
-  the whole database file.
+- **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
+  committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
+  poll took an exclusive lock on the whole database file. A scan now commits only when it
+  actually recorded an alert, and SQLite runs in WAL mode with `synchronous=NORMAL`. The
+  endpoints still record alerts on scan, by design
+  ([../business-rules/ALERTING.md](../business-rules/ALERTING.md)).
 - **PERF-02** — FastAPI runs the (synchronous) endpoints on 40 threadpool workers against
   a connection pool of 15. Past 15 concurrent requests the surplus ones time out with a
   500.
@@ -28,7 +31,8 @@ notes recorded deliberately rather than as defects — the login KDF cost (**PER
 correct as written and should not be changed.
 
 Every figure is measured against the seeded demo database, not estimated; the method is at
-the end of the document so any number can be reproduced.
+the end of the document so any number can be reproduced. One finding, PERF-01, has been
+fixed; the rest are recorded and still open.
 
 ## Related
 

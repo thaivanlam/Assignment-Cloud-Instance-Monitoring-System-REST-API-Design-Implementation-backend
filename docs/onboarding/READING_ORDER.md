@@ -12,7 +12,7 @@ models before the services, the services before the controllers that delegate to
   to change code safely inside one vertical slice.
 - **Prerequisites:** Python, and enough FastAPI to recognise `Depends`. SQLAlchemy 2.0 and
   Pydantic v2 details are explained where they first appear.
-- **Scope:** 76 numbered stops across the 17 source files under `app/`, plus the seed and
+- **Scope:** 77 numbered stops across the 17 source files under `app/`, plus the seed and
   the test fixtures.
 
 ---
@@ -26,7 +26,7 @@ models before the services, the services before the controllers that delegate to
 | [2](#stage-2--foundations-config-session-tables-dtos) | Settings, session, tables, DTOs | `config.py`, `database.py`, `models/`, `schemas/` | 10 |
 | [3](#stage-3--authentication-and-role-scoping) | Who the caller is, and what they may see | `core/`, `auth_controller.py` | 13 |
 | [4](#stage-4--the-reference-vertical-slice-instances) | The pattern every feature follows | `instance_service.py`, `instance_controller.py` | 12 |
-| [5](#stage-5--monitoring-where-the-business-rules-live) | Thresholds, auto-alerts, deduplication | `monitor_service.py`, `monitor_controller.py` | 10 |
+| [5](#stage-5--monitoring-where-the-business-rules-live) | Thresholds, auto-alerts, deduplication | `monitor_service.py`, `monitor_controller.py` | 11 |
 | [6](#stage-6--alerts) | Alert history and resolution | `alert_service.py`, `alert_controller.py` | 4 |
 | [7](#stage-7--clients-cost-and-sla) | Money and uptime arithmetic | `client_service.py`, `client_controller.py` | 13 |
 | [8](#stage-8--the-llm-diagnosis-feature) | The one external call, and its fallback | `llm_service.py` | 4 |
@@ -121,7 +121,7 @@ in dependency order.
 
 | # | Symbol | Line | What to take away |
 |---:|---|---|---|
-| 10 | `utcnow` | [models.py:10](../../app/models/models.py#L10) | UTC *without* tzinfo. Every timestamp in the database is naive-UTC, so comparisons never mix aware and naive values. Use this, never `datetime.now()`. |
+| 11 | `utcnow` | [models.py:10](../../app/models/models.py#L10) | UTC *without* tzinfo. Every timestamp in the database is naive-UTC, so comparisons never mix aware and naive values. Use this, never `datetime.now()`. |
 | 12 | `Role`, `ContractPlan`, `InstanceType`, `InstanceStatus`, `AlertType` | [models.py:14-40](../../app/models/models.py#L14-L40) | Five `str`-based enums, reused verbatim by the Pydantic schemas — so the API accepts and returns exactly these strings. |
 | 13 | `Member` | [models.py:43](../../app/models/models.py#L43) | Login identity plus role. The `clients` back-reference is what role scoping is built on. |
 | 14 | `Client` | [models.py:56](../../app/models/models.py#L56) | `managerId` — the single column that decides what a `CLIENT_MANAGER` may see. |
@@ -277,16 +277,17 @@ Once this diagram is in your head, Stages 5–7 are only about *what the service
 ## Stage 5 — Monitoring: where the business rules live
 
 [app/services/monitor_service.py](../../app/services/monitor_service.py) — the densest file
-in the project, and the one whose two private helpers explain the other four functions.
+in the project, and the one whose three private helpers explain the other four functions.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
 | 43 | `_has_unresolved_alert` | [monitor_service.py:11](../../app/services/monitor_service.py#L11) | Is there already an open alert of this type on this instance? |
 | 44 | `_record_alert` | [monitor_service.py:24](../../app/services/monitor_service.py#L24) | **The deduplication rule.** Adds an alert *unless* an unresolved one of the same type exists. This is why calling `GET /api/monitor/warnings` ten times produces one alert, not ten — and why resolving an alert lets the next scan raise a fresh one. |
-| 45 | `check_warnings` | [monitor_service.py:33](../../app/services/monitor_service.py#L33) | `cpuUsage >= 80` **and** status `RUNNING` — a stopped instance's stale CPU reading never warns. Records `CPU_HIGH` per hit, with one `commit` for the batch. |
-| 46 | `check_errors` | [monitor_service.py:54](../../app/services/monitor_service.py#L54) | Status `ERROR` → `ERROR_DETECTED`, message prefixed `[CRITICAL]`. |
-| 47 | `check_long_stopped` | [monitor_service.py:70](../../app/services/monitor_service.py#L70) | `STOPPED` and `updatedAt <= now - 48h` → `LONG_STOPPED`. This is the function that depends on the idempotent-PATCH guard from stop 35; read the two as a pair. |
-| 48 | `build_report` | [monitor_service.py:94](../../app/services/monitor_service.py#L94) | Read-only, unlike the three above. Counts by status via `GROUP BY`, warning count, `SUM(monthlyCost)` wrapped in `coalesce` so an empty scope returns `0.0` rather than `None`, and unresolved alerts newest-first. |
+| 45 | `_commit_if_recorded` | [monitor_service.py:33](../../app/services/monitor_service.py#L33) | Commits a scan **only if** it actually inserted something. A poll that dedup silenced writes nothing, so it must not take SQLite's write lock either — why this exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
+| 46 | `check_warnings` | [monitor_service.py:44](../../app/services/monitor_service.py#L44) | `cpuUsage >= 80` **and** status `RUNNING` — a stopped instance's stale CPU reading never warns. Records `CPU_HIGH` per hit, with at most one `commit` for the batch — and none at all when dedup skipped every insert. |
+| 47 | `check_errors` | [monitor_service.py:66](../../app/services/monitor_service.py#L66) | Status `ERROR` → `ERROR_DETECTED`, message prefixed `[CRITICAL]`. |
+| 48 | `check_long_stopped` | [monitor_service.py:83](../../app/services/monitor_service.py#L83) | `STOPPED` and `updatedAt <= now - 48h` → `LONG_STOPPED`. This is the function that depends on the idempotent-PATCH guard from stop 35; read the two as a pair. |
+| 49 | `build_report` | [monitor_service.py:108](../../app/services/monitor_service.py#L108) | Read-only, unlike the three above. Counts by status via `GROUP BY`, warning count, `SUM(monthlyCost)` wrapped in `coalesce` so an empty scope returns `0.0` rather than `None`, and unresolved alerts newest-first. |
 
 **The surprise worth internalising:** three of these are `GET` endpoints that *write* to the
 database. Scanning is what creates alerts — there is no scheduler in this system. If you
@@ -299,10 +300,10 @@ one-line endpoints, each passing `accessible_client_ids(member, db)` straight th
 
 | # | Function | Line |
 |---:|---|---|
-| 49 | `warnings` | [monitor_controller.py:18](../../app/controllers/monitor_controller.py#L18) |
-| 50 | `errors` | [monitor_controller.py:27](../../app/controllers/monitor_controller.py#L27) |
-| 51 | `long_stopped` | [monitor_controller.py:36](../../app/controllers/monitor_controller.py#L36) |
-| 52 | `report` | [monitor_controller.py:45](../../app/controllers/monitor_controller.py#L45) |
+| 50 | `warnings` | [monitor_controller.py:18](../../app/controllers/monitor_controller.py#L18) |
+| 51 | `errors` | [monitor_controller.py:27](../../app/controllers/monitor_controller.py#L27) |
+| 52 | `long_stopped` | [monitor_controller.py:36](../../app/controllers/monitor_controller.py#L36) |
+| 53 | `report` | [monitor_controller.py:45](../../app/controllers/monitor_controller.py#L45) |
 
 ---
 
@@ -313,16 +314,16 @@ The consumer side of what Stage 5 produces.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 53 | `list_alerts` | [alert_service.py:10](../../app/services/alert_service.py#L10) | Alerts carry no `clientId`, so scoping needs `join(Instance)` — the join *is* the role filter. Date filters widen a `date` to `time.min` / `time.max`, so `dateTo` includes the whole day. |
-| 54 | `resolve_alert` | [alert_service.py:32](../../app/services/alert_service.py#L32) | Idempotent: an already-resolved alert is returned unchanged, and `resolvedAt` is not overwritten. |
+| 54 | `list_alerts` | [alert_service.py:10](../../app/services/alert_service.py#L10) | Alerts carry no `clientId`, so scoping needs `join(Instance)` — the join *is* the role filter. Date filters widen a `date` to `time.min` / `time.max`, so `dateTo` includes the whole day. |
+| 55 | `resolve_alert` | [alert_service.py:32](../../app/services/alert_service.py#L32) | Idempotent: an already-resolved alert is returned unchanged, and `resolvedAt` is not overwritten. |
 
 **Controller** —
 [app/controllers/alert_controller.py](../../app/controllers/alert_controller.py):
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 55 | `list_alerts` | [alert_controller.py:20](../../app/controllers/alert_controller.py#L20) | Four optional query filters, all `None` by default |
-| 56 | `resolve_alert` | [alert_controller.py:39](../../app/controllers/alert_controller.py#L39) | Loads the alert itself to reach `alert.instance.client` for the guard — the one place a controller queries directly, and the one place a `404` comes from a raw `HTTPException` rather than a domain exception |
+| 56 | `list_alerts` | [alert_controller.py:20](../../app/controllers/alert_controller.py#L20) | Four optional query filters, all `None` by default |
+| 57 | `resolve_alert` | [alert_controller.py:39](../../app/controllers/alert_controller.py#L39) | Loads the alert itself to reach `alert.instance.client` for the guard — the one place a controller queries directly, and the one place a `404` comes from a raw `HTTPException` rather than a domain exception |
 
 ---
 
@@ -333,13 +334,13 @@ and the last two hold the only real arithmetic in the codebase.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 57 | `create_client` | [client_service.py:12](../../app/services/client_service.py#L12) | The `ValidationException` case: `managerId` must belong to a member whose role is `CLIENT_MANAGER`. Assigning a client to an ADMIN is `400`, not `422` — the check needs the database. |
-| 58 | `list_clients` | [client_service.py:34](../../app/services/client_service.py#L34) | The `None` / `or [-1]` convention again. |
-| 59 | `get_client` | [client_service.py:41](../../app/services/client_service.py#L41) | Load-or-404, used by all four below and by `create_instance`. |
-| 60 | `get_client_instances` | [client_service.py:48](../../app/services/client_service.py#L48) | Validates the client first, so a missing client gives `404` rather than an empty list. |
-| 61 | `get_client_cost` | [client_service.py:53](../../app/services/client_service.py#L53) | Sums the **stored** `monthlyCost` of *all* instances regardless of status, plus a per-instance breakdown. |
-| 62 | `get_cost_forecast` | [client_service.py:77](../../app/services/client_service.py#L77) | The contrast that matters: the forecast counts **only `RUNNING`** instances, priced from `UNIT_PRICES`. Current cost ≠ forecast, by design — [../business-rules/COST.md](../business-rules/COST.md) explains why. |
-| 63 | `get_sla` | [client_service.py:110](../../app/services/client_service.py#L110) | **Read the docstring before the code.** There is no status-history table, so uptime is approximated: the window runs `max(month start, launchedAt)` → now; an instance counts as up until now if `RUNNING`, or until `updatedAt` otherwise. The client figure is the mean across instances, compared against its plan threshold. An honest approximation, documented as one in [../business-rules/SLA.md](../business-rules/SLA.md). |
+| 58 | `create_client` | [client_service.py:12](../../app/services/client_service.py#L12) | The `ValidationException` case: `managerId` must belong to a member whose role is `CLIENT_MANAGER`. Assigning a client to an ADMIN is `400`, not `422` — the check needs the database. |
+| 59 | `list_clients` | [client_service.py:34](../../app/services/client_service.py#L34) | The `None` / `or [-1]` convention again. |
+| 60 | `get_client` | [client_service.py:41](../../app/services/client_service.py#L41) | Load-or-404, used by all four below and by `create_instance`. |
+| 61 | `get_client_instances` | [client_service.py:48](../../app/services/client_service.py#L48) | Validates the client first, so a missing client gives `404` rather than an empty list. |
+| 62 | `get_client_cost` | [client_service.py:53](../../app/services/client_service.py#L53) | Sums the **stored** `monthlyCost` of *all* instances regardless of status, plus a per-instance breakdown. |
+| 63 | `get_cost_forecast` | [client_service.py:77](../../app/services/client_service.py#L77) | The contrast that matters: the forecast counts **only `RUNNING`** instances, priced from `UNIT_PRICES`. Current cost ≠ forecast, by design — [../business-rules/COST.md](../business-rules/COST.md) explains why. |
+| 64 | `get_sla` | [client_service.py:110](../../app/services/client_service.py#L110) | **Read the docstring before the code.** There is no status-history table, so uptime is approximated: the window runs `max(month start, launchedAt)` → now; an instance counts as up until now if `RUNNING`, or until `updatedAt` otherwise. The client figure is the mean across instances, compared against its plan threshold. An honest approximation, documented as one in [../business-rules/SLA.md](../business-rules/SLA.md). |
 
 **Controller** —
 [app/controllers/client_controller.py](../../app/controllers/client_controller.py). Six
@@ -347,12 +348,12 @@ endpoints; the first uses `require_admin`, the rest `get_client` + `assert_clien
 
 | # | Function | Line |
 |---:|---|---|
-| 64 | `create_client` | [client_controller.py:26](../../app/controllers/client_controller.py#L26) |
-| 65 | `list_clients` | [client_controller.py:35](../../app/controllers/client_controller.py#L35) |
-| 66 | `client_instances` | [client_controller.py:40](../../app/controllers/client_controller.py#L40) |
-| 67 | `client_cost` | [client_controller.py:51](../../app/controllers/client_controller.py#L51) |
-| 68 | `client_cost_forecast` | [client_controller.py:66](../../app/controllers/client_controller.py#L66) |
-| 69 | `client_sla` | [client_controller.py:81](../../app/controllers/client_controller.py#L81) |
+| 65 | `create_client` | [client_controller.py:26](../../app/controllers/client_controller.py#L26) |
+| 66 | `list_clients` | [client_controller.py:35](../../app/controllers/client_controller.py#L35) |
+| 67 | `client_instances` | [client_controller.py:40](../../app/controllers/client_controller.py#L40) |
+| 68 | `client_cost` | [client_controller.py:51](../../app/controllers/client_controller.py#L51) |
+| 69 | `client_cost_forecast` | [client_controller.py:66](../../app/controllers/client_controller.py#L66) |
+| 70 | `client_sla` | [client_controller.py:81](../../app/controllers/client_controller.py#L81) |
 
 ---
 
@@ -365,10 +366,10 @@ Read it **bottom-up**: `diagnose` is three lines and tells you what the other th
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 70 | `_build_context` | [llm_service.py:19](../../app/services/llm_service.py#L19) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
-| 71 | `_llm_diagnosis` | [llm_service.py:39](../../app/services/llm_service.py#L39) | The Anthropic SDK call, with `import anthropic` *inside* the function so the dependency stays optional. Two comments worth reading: the SDK never reads `.env`, so the key is handed over explicitly; and adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`. |
-| 72 | `_rule_based_diagnosis` | [llm_service.py:83](../../app/services/llm_service.py#L83) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
-| 73 | `diagnose` | [llm_service.py:113](../../app/services/llm_service.py#L113) | Try the LLM, fall back, return `(text, source)` — `source` is surfaced in the response so a caller can always tell which path ran. |
+| 71 | `_build_context` | [llm_service.py:19](../../app/services/llm_service.py#L19) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
+| 72 | `_llm_diagnosis` | [llm_service.py:39](../../app/services/llm_service.py#L39) | The Anthropic SDK call, with `import anthropic` *inside* the function so the dependency stays optional. Two comments worth reading: the SDK never reads `.env`, so the key is handed over explicitly; and adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`. |
+| 73 | `_rule_based_diagnosis` | [llm_service.py:83](../../app/services/llm_service.py#L83) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
+| 74 | `diagnose` | [llm_service.py:113](../../app/services/llm_service.py#L113) | Try the LLM, fall back, return `(text, source)` — `source` is surfaced in the response so a caller can always tell which path ran. |
 
 **The design point:** this endpoint has no failure mode. No API key, no network, a bad
 response — all produce a useful answer with `source: "rule-based"`, which is why the demo
@@ -390,9 +391,9 @@ exercise every rule you have just read:
 
 | Seeded case | Rule it demonstrates |
 |---|---|
-| `health-api-01` 96.3%, `vinasoft-web-01` 91.5%, `fintech-core-02` 88.4%, `hnlog-api-01` 85.2% | four `CPU_HIGH` warnings (stop 45) |
-| `hnlog-worker-01`, `dnmedia-stream-01` in `ERROR` | `ERROR_DETECTED` and the diagnosis endpoint (stops 46, 73) |
-| `sgretail-report-01` 120h, `green-iot-01` 96h, `vinasoft-batch-01` 72h stopped | `LONG_STOPPED` past the 48h threshold (stop 47) |
+| `health-api-01` 96.3%, `vinasoft-web-01` 91.5%, `fintech-core-02` 88.4%, `hnlog-api-01` 85.2% | four `CPU_HIGH` warnings (stop 46) |
+| `hnlog-worker-01`, `dnmedia-stream-01` in `ERROR` | `ERROR_DETECTED` and the diagnosis endpoint (stops 47, 74) |
+| `sgretail-report-01` 120h, `green-iot-01` 96h, `vinasoft-batch-01` 72h stopped | `LONG_STOPPED` past the 48h threshold (stop 48) |
 | clients 1–5 → `lam@`, clients 6–10 → `minh@` | role scoping (stops 29, 30) |
 
 Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
@@ -404,9 +405,9 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 
 | # | Fixture | Line | What to take away |
 |---:|---|---|---|
-| 74 | `memoised_seed_hashing` | [conftest.py:16](../../tests/conftest.py#L16) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
-| 75 | `api` | [conftest.py:33](../../tests/conftest.py#L33) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
-| 76 | `auth_headers` | [conftest.py:68](../../tests/conftest.py#L68) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
+| 75 | `memoised_seed_hashing` | [conftest.py:16](../../tests/conftest.py#L16) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
+| 76 | `api` | [conftest.py:33](../../tests/conftest.py#L33) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
+| 77 | `auth_headers` | [conftest.py:68](../../tests/conftest.py#L68) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
 
 Then read the suites in the same order as this document:
 
