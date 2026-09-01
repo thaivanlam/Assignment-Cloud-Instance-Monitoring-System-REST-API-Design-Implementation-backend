@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--perf-07-fixed-every-list-endpoint-is-paginated) | PERF-07 fixed | Every list endpoint paginates — **breaking**; a response no longer grows with the table |
 | [2026-09-01](#2026-09-01--perf-06-fixed-a-commit-no-longer-re-selects-the-rows-it-returns) | PERF-06 fixed | A monitoring scan is four statements whether it returns 4 rows or 500 |
 | [2026-09-01](#2026-09-01--operations-runbooks) | Operations runbooks | Deployment, configuration and 15 incident runbooks for whoever is on call |
 | [2026-09-01](#2026-09-01--perf-05-fixed-a-scan-dedups-in-one-query-and-writes-in-one-insert) | PERF-05 fixed | A monitoring scan costs three statements instead of two per instance |
@@ -38,6 +39,115 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — PERF-07 fixed: every list endpoint is paginated
+
+The last high-severity performance finding closed, and the first change in this project
+that **breaks the API contract**. Six endpoints that returned a JSON array now return the
+`PageResponse` envelope `GET /api/instances` has always used. 123 tests pass — 104 as
+before, 14 of them updated for the new shape, plus 19 new ones.
+
+### Changed — breaking
+
+- **`GET /api/alerts`, `GET /api/clients`, `GET /api/clients/{id}/instances`,
+  `GET /api/monitor/warnings`, `/errors` and `/long-stopped` return
+  `PageResponse[T]`**, not `T[]`. A client that iterated the response now reads `.items`.
+  All six take `page` (default `1`) and `size` (default `10`, max `100`) and answer `422`
+  outside those bounds. `total` is the count after filters and role scoping, so a
+  `CLIENT_MANAGER` is never told how many rows exist outside their scope. Measured on the
+  demo data grown with 700 extra instances, `GET /api/alerts` went from 709 rows and
+  144,036 bytes to 10 rows and 2,108 bytes, and its peak allocation per request from
+  2,220 KiB to **96 KiB** — where at 3,000 extra instances the old shape reached 9,024 KiB
+  and the new one is still 97 KiB. `alerts` is the table nothing prunes, which is why it
+  needed the bound first.
+- **`GET /api/monitor/report` caps `unresolvedAlerts` at the 20 most recent**, and
+  `unresolvedAlertCount` is now a `func.count()` rather than the length of that array. The
+  two fields no longer answer the same question: the count is the true total and can
+  exceed the preview beside it, with the full history behind the paginated
+  `GET /api/alerts`. Before this the report built the entire unresolved list purely to
+  take its length.
+- **Detection is unchanged; only its response is paged.** The three monitoring scans still
+  record an alert for **every** instance meeting their condition, not only those on the
+  page returned — `?size=1` against four high-CPU instances answers with one and records
+  four. Paginating the recording would have made detection depend on how far a dashboard
+  scrolled, which is the one way this change could have become a functional regression.
+  Stated in [../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts)
+  and pinned by a test.
+- **`id` is now the final sort key on `GET /api/alerts` and `GET /api/instances`.** Rows
+  tied on the sort key have no defined order between them, so a row could be served on two
+  pages or on none as a caller walked them — and on `/api/alerts` ties are the normal case,
+  because a scan stamps every alert it records with the same instant. The plans are
+  unchanged: SQLite already holds a non-unique index in `(key, rowid)` order, so the
+  ordered index scan [PERF-04](../performance/PERFORMANCE_BUGS.md#perf-04) bought is not
+  given back.
+
+### Added
+
+- **[app/pagination.py](../../app/pagination.py)** — the `page`/`size` bounds as reusable
+  `Annotated` aliases, and `paginate()`, which returns `(items, total, totalPages)` for a
+  query. One definition, seven endpoints: `size` cannot be capped at `100` on one route and
+  something else on the next. `GET /api/instances` was rewired through it rather than
+  keeping its own copy.
+- **19 functional tests.** The ones worth naming pin behaviour a reader would otherwise
+  have to trust: `a_scan_records_alerts_for_every_match_not_only_the_page`,
+  `monitoring_scans_are_unchanged_by_the_batch_size` (identical results at
+  `ID_BATCH_SIZE` 1, 3 and 500), `alert_pages_partition_the_history_without_gaps_or_repeats`
+  and `pages_partition_a_non_unique_sort_without_gaps_or_repeats` for the tiebreaker,
+  `report_caps_the_embedded_alerts_but_not_the_count`, and
+  `cost_and_sla_still_cover_every_instance_not_a_page`.
+
+### Fixed
+
+- **[PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07)**, as above.
+- **[PERF-08](../performance/PERFORMANCE_BUGS.md#perf-08) — the count query no longer
+  sorts in order to count.** Not a separate change: the shared `paginate()` helper had to
+  count correctly before six more endpoints started calling it, so writing the old
+  `query.count()` into it would have spread the defect rather than fixed it. The statement
+  went from a co-routine subquery selecting all ten columns with the `ORDER BY` intact, to
+  `SELECT count(instances.id) FROM instances WHERE ...`; the plan went from four steps
+  including a `USE TEMP B-TREE FOR ORDER BY` to a single **covering** index seek.
+- **A monitoring scan no longer materialises its whole result set.** `_scan` walks the
+  matches in id-keyset batches of `ID_BATCH_SIZE`, recording as it goes and keeping only
+  the requested window, so `total` and the page fall out of a walk the scan was making
+  anyway — no extra count query — and memory is bounded by one batch. The cost, stated
+  plainly: at 704 matching instances a scan issues 7 statements against 5, two more per
+  500 instances, in exchange for a response and a working set that stop growing.
+
+### Documentation
+
+- [../api/CONVENTIONS.md](../api/CONVENTIONS.md) — § 1 rewritten: pagination now lists all
+  seven endpoints rather than declaring `GET /api/instances` the only one, with the report
+  named as the deliberate exception, the detection-is-not-paginated rule, and § 3 gaining
+  why `id` closes every sort.
+- [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../api/OVERVIEW.md](../api/OVERVIEW.md),
+  [../api/ERRORS.md](../api/ERRORS.md) — the six response shapes, the new query parameters
+  and the `422`s they can now return.
+- [../business-rules/ALERTING.md](../business-rules/ALERTING.md) — § 2 gains the asymmetry
+  between what a scan detects and what it returns; § 5 and § 6 the paged history and the
+  capped report preview. [COST.md](../business-rules/COST.md) and
+  [SLA.md](../business-rules/SLA.md) say why their per-instance arrays are *not* paged.
+- [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — `pagination.py` in the layout,
+  and why it sits outside the layer table on purpose.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — a new § 2.3 for
+  `pagination.py`, stops added for `_scan`, `_client_instances_query` and
+  `list_client_instances`, and all 82 stops renumbered.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-07 and
+  PERF-08 marked **Fixed**, with the measured response sizes, the peak-allocation table at
+  three database sizes, the statement counts, the plans, and an explicit list of what the
+  fix does *not* address: the breaking change itself, the join PERF-09 still carries — now
+  paid twice per request — the two unbounded arrays in the cost and SLA responses, and
+  deep `OFFSET` paging.
+- [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) — steps 5, 12, 15 and 16 show the
+  envelope, and step 12 gains the `?size=1` demonstration that a paged scan still records
+  every alert.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md),
+  [../team/MEMBER_C.md](../team/MEMBER_C.md), and the test count in every document quoting
+  it: 104 → 123.
+- [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) and
+  [../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) — a mapping row for
+  `app/pagination.py`, added to both copies as that rule requires.
 
 ---
 
@@ -766,6 +876,6 @@ and were removed in `13aabcd`.
 | [../contributing/COMMITS.md](../contributing/COMMITS.md) | The commit prefixes and scoping this document mirrors |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Which other document a change updates alongside this one |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | The steps and numbers a behaviour change may invalidate |
-| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Findings recorded on 2026-08-29, none yet fixed |
-| [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | What the 104 tests pin down |
+| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Findings recorded on 2026-08-29; eight fixed since |
+| [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | What the tests pin down |
 | [../README.md](../README.md) | Documentation index |
