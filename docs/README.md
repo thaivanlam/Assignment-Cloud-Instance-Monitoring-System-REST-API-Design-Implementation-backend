@@ -104,6 +104,8 @@ own README linking to the files inside it.
 - **Read before you write.** Consult the document covering the area you are about to
   change before changing it.
 - **Every folder has a README** linking to its files and to related documents elsewhere.
+- **Swagger screenshots follow the API.** A change that alters a response re-captures
+  the affected images in [screenshots/](screenshots/README.md), in the same commit.
 - **Commit subjects carry a type prefix** — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
 
 Full rules, including the source → document mapping:

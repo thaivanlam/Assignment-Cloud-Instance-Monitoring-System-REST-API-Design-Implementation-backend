@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--screenshots-follow-the-api) | Screenshots follow the API | Swagger captures are re-taken in the commit that invalidates them |
 | [2026-09-01](#2026-09-01--database-engine-document) | Database engine document | Which pool each `DATABASE_URL` gets, and where in-memory SQLite is used |
 | [2026-08-31](#2026-08-31--perf-02-fixed-the-connection-pool-matches-the-request-concurrency) | PERF-02 fixed | The pool serves 40 concurrent requests instead of 15 |
 | [2026-08-31](#2026-08-31--perf-01-fixed-monitoring-polls-no-longer-lock-the-database) | PERF-01 fixed | Scans commit only when they record; SQLite runs in WAL |
@@ -31,6 +32,37 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Screenshots follow the API
+
+One commit adding a documentation rule. No source changed.
+
+### Documentation
+
+- **Added rule 6, *Screenshots follow the API*, to
+  [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#6-screenshots-follow-the-api)**
+  — the 29 captures in [../screenshots/](../screenshots/README.md) are live Swagger UI
+  responses, so a change to a route, a field, a status code, an error body or the seed
+  numbers makes one wrong. The affected PNG is now re-captured in the *same commit* as
+  the change, the same requirement rule 3 places on documents. The rule names the command
+  (`python scripts/capture_swagger_ui.py --only <scenario>` against a running server),
+  the `monitoring.db` side effects that make a full run drift from
+  [../demo/SEED_DATA.md](../demo/SEED_DATA.md), and what to update when a scenario is
+  added or removed. *Writing style* and *Related* renumbered to 7 and 8; the § 5 mapping
+  anchor cited elsewhere in this file is unchanged.
+- **Extended the source → document mapping** with a row for anything visible in a Swagger
+  response, pointing at [../screenshots/](../screenshots/README.md).
+- **Condensed the rule into [../../CLAUDE.md](../../CLAUDE.md)** as rule 5, so an agent
+  gets it without opening the contributing guide.
+- **Added a *Keeping them current* section to
+  [../screenshots/README.md](../screenshots/README.md)** with the capture command, so the
+  rule is discoverable from the folder it governs.
+- **Listed the rule in the two conventions summaries** — [../README.md](../README.md)
+  § *Conventions for these documents* and
+  [../contributing/README.md](../contributing/README.md) § *The short version* — which
+  would otherwise describe an incomplete rule set.
 
 ---
 
