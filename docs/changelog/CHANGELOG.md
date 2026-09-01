@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--requirements-test-cases-and-a-user-manual) | Requirements, test cases and a user manual | BRD, SRS, FRS, use cases and user stories; a test case specification; an end-user manual |
 | [2026-09-01](#2026-09-01--security-review) | Security review | 15 reproduced findings, two critical — a signing key anyone can read, and credentials served to anyone |
 | [2026-09-01](#2026-09-01--perf-09-fixed-the-alert-listing-joins-only-when-it-has-to) | PERF-09 fixed | An `ADMIN` reading alert history no longer joins `instances` for a column nothing uses |
 | [2026-09-01](#2026-09-01--perf-07-fixed-every-list-endpoint-is-paginated) | PERF-07 fixed | Every list endpoint paginates — **breaking**; a response no longer grows with the table |
@@ -41,6 +42,58 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Requirements, test cases and a user manual
+
+### Documentation
+
+- **Added [requirements/](../requirements/README.md)** — the specification layer the
+  repository did not have. [BRD.md](../requirements/BRD.md) records the business context
+  (the spreadsheet these ten client companies were tracked in), six objectives,
+  stakeholders, scope, and 19 business requirements. [SRS.md](../requirements/SRS.md)
+  carries ten functional requirements and the non-functional set — performance, security,
+  reliability, maintainability, portability, usability — each marked with how it is
+  verified. [FRS.md](../requirements/FRS.md) specifies 24 functions, inputs through
+  failure paths, including the three cross-cutting ones (pagination, scoping, error
+  mapping) that every endpoint inherits.
+  [USE_CASES.md](../requirements/USE_CASES.md) holds 15 use cases with their alternative
+  flows and 30 user stories with Given/When/Then criteria naming the test that holds each
+  one. `4f492fb`
+- **Added [testing/TEST_CASES.md](../testing/TEST_CASES.md)** — 100 cases with
+  precondition, steps, data and exact expected result, each linked to the automated test
+  that runs it. The cases that **cannot** be automated say so: the December forecast
+  roll-over, the diagnosis timeout, and mid-month SLA windows are marked *Manual* rather
+  than left looking covered. It sits beside
+  [FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md), which describes how the suite is
+  built rather than what must be checked. `1bcd427`
+- **Added [manual/USER_MANUAL.md](../manual/USER_MANUAL.md)** — the end-user document, in
+  task order rather than endpoint order, with an error-message table mapping every status
+  code to what to do about it, and an FAQ answering the questions the design provokes:
+  why a repeated status update changes nothing, why a resolved alert comes back, and why
+  an SLA figure must not be quoted to a client. `ec11e69`
+- **Wired the new folders into the indexes** — [../README.md](../README.md), the root
+  [README.md](../../README.md) and the folder READMEs, per rule 4 of
+  [contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md). The root README's
+  "eleven documentation folders" was already stale at thirteen; it now reads fifteen.
+  `47d9ebc`
+- **Extended the source → document mapping** in
+  [contributing/DOCUMENTATION.md § 5](../contributing/DOCUMENTATION.md#5-source--document-mapping)
+  and in `MAPPING` in [check_docs_sync.py](../../scripts/check_docs_sync.py), in the same
+  commit as the rule requires: a change under `app/controllers/` now also points at the
+  FRS and the user manual, `app/schemas/` at the FRS, and `tests/` at the test cases. The
+  check only warns when *none* of a row's documents are staged, so the added rows raise no
+  new noise. `490b7db`
+
+Traceability now runs end to end — **BR → FR/NFR → F-\* → UC/US → TC** — and it is
+traceability against the delivered system: the documents were written from the code and
+the tests, so where a requirement is only partly met they say so. BR-13 (SLA reporting) is
+recorded as partially met against the uptime approximation, and NFR-SEC-06 and NFR-SEC-07
+are recorded as **not met** against the open findings in
+[security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md).
+
+No code changed and no behaviour moved. All 124 tests still pass.
 
 ---
 
