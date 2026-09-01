@@ -237,6 +237,7 @@ linking to the files inside it.
 | 📐 [docs/design/](docs/design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | 🧪 [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
 | ⚡ [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
+| 🛠️ [docs/operations/](docs/operations/README.md) | Deploying, configuring and troubleshooting a running deployment |
 | 👥 [docs/team/](docs/team/README.md) | Per-member assignment scope |
 | 🤝 [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
 | 🗓️ [docs/changelog/](docs/changelog/README.md) | What changed in this repository, and when |
@@ -264,6 +265,9 @@ linking to the files inside it.
 | Running the tests | [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) |
 | What the tests cover | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) |
 | Performance bugs and fixes | [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md) |
+| Deploying, upgrading, rolling back | [docs/operations/DEPLOYMENT.md](docs/operations/DEPLOYMENT.md) |
+| Settings, secrets and API keys | [docs/operations/CONFIGURATION.md](docs/operations/CONFIGURATION.md) |
+| Incident runbooks — crashes and outages | [docs/operations/RUNBOOKS.md](docs/operations/RUNBOOKS.md) |
 | Commit conventions | [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md) |
 | Documentation rules | [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md) |
 | Change history | [docs/changelog/CHANGELOG.md](docs/changelog/CHANGELOG.md) |

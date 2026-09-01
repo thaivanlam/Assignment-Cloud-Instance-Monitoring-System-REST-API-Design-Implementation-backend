@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--operations-runbooks) | Operations runbooks | Deployment, configuration and 15 incident runbooks for whoever is on call |
 | [2026-09-01](#2026-09-01--perf-05-fixed-a-scan-dedups-in-one-query-and-writes-in-one-insert) | PERF-05 fixed | A monitoring scan costs three statements instead of two per instance |
 | [2026-09-01](#2026-09-01--perf-04-fixed-the-filtered-and-sorted-columns-are-indexed) | PERF-04 fixed | Every list endpoint seeks its rows instead of scanning the table |
 | [2026-09-01](#2026-09-01--perf-03-fixed-the-llm-call-is-bounded-and-holds-no-connection) | PERF-03 fixed | A diagnosis waits at most 60 s, and holds no database connection while it waits |
@@ -36,6 +37,44 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Operations runbooks
+
+The documentation covered how the system is built and how it behaves, but not how to run
+it — the tenth folder answers that. No code behaviour changed.
+
+### Documentation
+
+- **[../operations/](../operations/README.md)** — a new folder for running the API:
+  [DEPLOYMENT.md](../operations/DEPLOYMENT.md) (local, single-server and Vercel launches,
+  what a healthy start logs, the four calls that verify a deployment, upgrade, rollback,
+  backup and reset), [CONFIGURATION.md](../operations/CONFIGURATION.md) (every setting and
+  its precedence, generating `SECRET_KEY`, the Anthropic key and its fallback, what
+  `DATABASE_URL` selects, reading back the effective configuration with secrets redacted)
+  and [RUNBOOKS.md](../operations/RUNBOOKS.md) (fifteen incident runbooks — symptom, cause,
+  fix, verification — with a 60-second triage, a guide to the log lines, and what to
+  collect before escalating).
+- Every error message, command and expected output in the three documents was reproduced
+  against this repository rather than recalled — the startup and bind-failure logs, the
+  `unable to open database file` and missing-driver failures, the LLM fallback warning
+  line, the index listing, the `PRAGMA journal_mode`/`integrity_check` probes, the
+  `VACUUM INTO` backup, and the four verification calls against a running server.
+- Two operational consequences that were implicit are now stated where an operator will
+  look for them: the default `SECRET_KEY` is published in this repository and must be
+  replaced before a deployment is reachable, and a serverless deployment cannot keep its
+  database — every cold start re-seeds
+  ([../performance/PERFORMANCE_BUGS.md § PERF-15](../performance/PERFORMANCE_BUGS.md#perf-15)).
+
+### Changed
+
+- **The docs-sync check maps two more sources.** `app/config.py` now also asks for
+  [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) and `app/main.py` for
+  [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md), in both copies of the
+  mapping — section 5 of [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md)
+  and `MAPPING` in [../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) —
+  so a new setting or a change to the startup hook reminds its operator document too.
 
 ---
 
