@@ -30,4 +30,5 @@ than by release. The commit hash on each bullet is the link back to the diff.
 | [../contributing/COMMITS.md](../contributing/COMMITS.md) | The `feat:` / `fix:` / `docs:` prefixes the categories mirror |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | The steps and expected numbers a behaviour change may invalidate |
 | [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Known defects that are recorded but not yet fixed |
+| [../security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md) | Known security findings, none closed yet |
 | [../README.md](../README.md) | Documentation index |

@@ -45,7 +45,7 @@ role scoping and 124 functional tests.
 | 💵 | **Cost & forecast** | `SMALL $50` / `MEDIUM $120` / `LARGE $250` per month; the forecast counts only `RUNNING` instances |
 | 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
 | 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
-| 📚 | **Documented end to end** | Ten documentation folders: API reference, business rules, ERD, walkthrough, performance findings |
+| 📚 | **Documented end to end** | Eleven documentation folders: API reference, business rules, ERD, walkthrough, performance and security findings |
 | ✅ | **124 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
@@ -223,6 +223,10 @@ the same demo data, so its expected values are exact rather than approximate.
 critical, nine fixed so far:
 [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md).
 
+🔐 Injection, information disclosure and session integrity were reviewed the same way —
+15 reproduced findings, two rated critical, none fixed yet:
+[docs/security/SECURITY_BUGS.md](docs/security/SECURITY_BUGS.md).
+
 ---
 
 ## 📚 Documentation
@@ -239,6 +243,7 @@ linking to the files inside it.
 | 📐 [docs/design/](docs/design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | 🧪 [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
 | ⚡ [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
+| 🔐 [docs/security/](docs/security/README.md) | Reproduced injection, disclosure and session findings |
 | 🛠️ [docs/operations/](docs/operations/README.md) | Deploying, configuring and troubleshooting a running deployment |
 | 👥 [docs/team/](docs/team/README.md) | Per-member assignment scope |
 | 🤝 [docs/contributing/](docs/contributing/README.md) | Commit conventions and documentation rules |
@@ -267,6 +272,7 @@ linking to the files inside it.
 | Running the tests | [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) |
 | What the tests cover | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) |
 | Performance bugs and fixes | [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md) |
+| Security bugs and fixes | [docs/security/SECURITY_BUGS.md](docs/security/SECURITY_BUGS.md) |
 | Deploying, upgrading, rolling back | [docs/operations/DEPLOYMENT.md](docs/operations/DEPLOYMENT.md) |
 | Settings, secrets and API keys | [docs/operations/CONFIGURATION.md](docs/operations/CONFIGURATION.md) |
 | Incident runbooks — crashes and outages | [docs/operations/RUNBOOKS.md](docs/operations/RUNBOOKS.md) |

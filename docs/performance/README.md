@@ -100,5 +100,6 @@ statement count — it removes work from inside a query without changing how man
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The diagnosis endpoint behind PERF-03 and PERF-14 |
 | [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 had to preserve, and why PERF-07 pages a scan's response but not its detection |
 | [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention PERF-07 extended to every list endpoint |
+| [../security/README.md](../security/README.md) | The sibling register — the same codebase reviewed for what it exposes rather than what it costs |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Why a passing suite catches none of this |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Keeping this document current when a finding is fixed |

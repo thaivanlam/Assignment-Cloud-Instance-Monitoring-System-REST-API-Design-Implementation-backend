@@ -12,6 +12,7 @@ own README linking to the files inside it.
 | [design/](design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | [testing/](testing/README.md) | Functional test suite and how to run it |
 | [performance/](performance/README.md) | Measured latency, throughput and concurrency findings |
+| [security/](security/README.md) | Reproduced injection, disclosure and session findings |
 | [operations/](operations/README.md) | Deploying, configuring and troubleshooting a running deployment |
 | [team/](team/README.md) | Per-member assignment scope |
 | [contributing/](contributing/README.md) | Commit conventions and documentation rules |
@@ -33,6 +34,7 @@ own README linking to the files inside it.
 | Work on the AI diagnosis feature | [design/LLM_FEATURE.md](design/LLM_FEATURE.md) |
 | Run the tests, or add one | [testing/RUNNING_TESTS.md](testing/RUNNING_TESTS.md) → [testing/FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) |
 | Know what is slow, and why | [performance/PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) |
+| Know what is exposed, and why | [security/SECURITY_BUGS.md](security/SECURITY_BUGS.md) |
 | Deploy it somewhere, or configure its keys | [operations/DEPLOYMENT.md](operations/DEPLOYMENT.md) → [operations/CONFIGURATION.md](operations/CONFIGURATION.md) |
 | Fix a server that will not start, or stopped answering | [operations/RUNBOOKS.md](operations/RUNBOOKS.md) |
 | Commit a change | [contributing/COMMITS.md](contributing/COMMITS.md) |
@@ -83,6 +85,10 @@ own README linking to the files inside it.
 **[performance/](performance/README.md)**
 
 - [PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) — 15 measured performance findings, ranked, with fixes
+
+**[security/](security/README.md)**
+
+- [SECURITY_BUGS.md](security/SECURITY_BUGS.md) — 15 reproduced security findings, ranked, with fixes and what was found sound
 
 **[operations/](operations/README.md)**
 
