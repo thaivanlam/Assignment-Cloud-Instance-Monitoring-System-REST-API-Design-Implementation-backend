@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--security-review) | Security review | 15 reproduced findings, two critical — a signing key anyone can read, and credentials served to anyone |
 | [2026-09-01](#2026-09-01--perf-09-fixed-the-alert-listing-joins-only-when-it-has-to) | PERF-09 fixed | An `ADMIN` reading alert history no longer joins `instances` for a column nothing uses |
 | [2026-09-01](#2026-09-01--perf-07-fixed-every-list-endpoint-is-paginated) | PERF-07 fixed | Every list endpoint paginates — **breaking**; a response no longer grows with the table |
 | [2026-09-01](#2026-09-01--perf-06-fixed-a-commit-no-longer-re-selects-the-rows-it-returns) | PERF-06 fixed | A monitoring scan is four statements whether it returns 4 rows or 500 |
@@ -40,6 +41,34 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Security review
+
+### Documentation
+
+- **Added [security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md)** — 15 findings on
+  injection, information disclosure and session integrity, each **reproduced** against the
+  seeded API through the same `TestClient` harness the suite uses, with the application
+  code unmodified. Two are rated critical, and both bypass authentication without touching
+  the API's logic: the default `SECRET_KEY` is a literal in `config.py` and `.env.example`,
+  and a token forged with it was accepted at an `ADMIN`-only endpoint (SEC-01); the three
+  seeded accounts and their passwords are served to anyone by `/openapi.json` and `/docs`
+  (SEC-02). The session finding the review was asked for is SEC-04 — there is no logout and
+  no revocation, so an issued token cannot be stopped before its expiry — blocked behind
+  SEC-08, because the token carries no `jti` or `iat` to name in a denylist. The document
+  also records what was checked and found sound: **SQL injection is not present and is
+  structurally prevented**, and no stack trace reaches a client. `97955e9`
+- **Indexed the new folder** from [../README.md](../README.md), the root
+  [README.md](../../README.md), [../performance/README.md](../performance/README.md) and
+  this folder's README. `97955e9`
+
+No code changed and nothing is fixed — this is the register, in the same shape as
+[performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md), and the order to
+work through it is at
+[Where to start](../security/SECURITY_BUGS.md#where-to-start). All 124 tests still pass,
+which is the point: none of them catch any of this.
 
 ---
 
