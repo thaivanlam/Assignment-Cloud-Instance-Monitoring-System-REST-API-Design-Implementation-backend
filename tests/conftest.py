@@ -41,7 +41,11 @@ def api():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    testing_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    # The same arguments as the application's factory, `expire_on_commit=False`
+    # included, so the suite exercises the session semantics the API runs on.
+    testing_session = sessionmaker(
+        autocommit=False, autoflush=False, expire_on_commit=False, bind=engine
+    )
     Base.metadata.create_all(bind=engine)
     db = testing_session()
     seed(db)

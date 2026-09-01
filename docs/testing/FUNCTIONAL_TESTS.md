@@ -43,10 +43,14 @@ def test_instance_is_deleted_once_stopped(api, auth_headers):
     assert db.get(Instance, 1) is None
 ```
 
-Three details make this work:
+Four details make this work:
 
 - `StaticPool` keeps one connection alive, so pytest and FastAPI's worker thread see the
   same in-memory database. Without it, each connection would get its own empty database.
+- The session factory carries the same arguments as the application's — including
+  `expire_on_commit=False` — so the suite exercises the session semantics the API
+  actually runs on rather than SQLAlchemy's defaults
+  ([../design/DATABASE.md § 3](../design/DATABASE.md#3-the-session-factory)).
 - The override is cleared and the schema dropped in the fixture teardown, so no state
   leaks between tests. Tests may create, mutate, and delete freely, and they may run in
   any order.

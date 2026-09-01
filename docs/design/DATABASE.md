@@ -1,7 +1,7 @@
 # Database engine and in-memory SQLite
 
-Which database the application opens, how the URL decides the connection pool, and where
-the in-memory mode is actually used.
+Which database the application opens, how the URL decides the connection pool, how a
+request's session behaves, and where the in-memory mode is actually used.
 
 Engine construction lives in [app/database.py](../../app/database.py); the test engine is
 built separately in [tests/conftest.py](../../tests/conftest.py).
@@ -69,7 +69,52 @@ itself:
 
 ---
 
-## 3. Where in-memory SQLite is used
+## 3. The session factory
+
+The engine decides *how* the application connects. `SessionLocal` decides what a request
+does with the connection it borrows:
+
+```python
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, expire_on_commit=False, bind=engine
+)
+```
+
+| Argument | Effect |
+|---|---|
+| `autocommit=False` | A statement does not commit itself; a service commits explicitly or nothing is written |
+| `autoflush=False` | A pending change is not flushed by the next query; the flush happens at `commit()` |
+| `expire_on_commit=False` | Objects loaded before a `commit()` stay usable after it, instead of being re-fetched on the next attribute read |
+
+The third one is the one worth explaining, because SQLAlchemy's default is the opposite.
+On the default, `commit()` marks every object in the session expired, so the *next* read
+of any attribute silently issues a `SELECT` to reload the row. That is a sensible default
+for a session that outlives its transaction and might be looking at rows another
+transaction has since changed. It is the wrong default here: a request opens its own
+session, commits at most once, and then serialises rows it loaded moments earlier and
+mutated itself. The monitoring scans are the clearest case — they commit the alerts they
+recorded and then return the instances they scanned, so Pydantic reading
+`instance.instanceName` re-fetched every row.
+
+The cost was one `SELECT` per row returned, on top of the query that had just returned
+them. Measured on the seeded database, an `ADMIN` `GET /api/monitor/warnings` first scan:
+8 statements for 4 instances, of which 5 were `SELECT`s against `instances` — one query
+and four refreshes. It is 4 statements now, and the count no longer grows with the result
+set.
+
+What the setting does **not** change: `db.refresh()` still refreshes. `create_instance`,
+`update_status`, `create_client` and `resolve_alert` each call it after their commit and
+each still issues the same single `SELECT` — on the default they were paying for it
+implicitly, and now they ask for it. Background and the full before/after trace:
+[../performance/PERFORMANCE_BUGS.md § PERF-06](../performance/PERFORMANCE_BUGS.md#perf-06).
+
+The test fixture builds its own session factory with the same three arguments
+([tests/conftest.py](../../tests/conftest.py)), so the suite exercises the same session
+semantics the application runs on.
+
+---
+
+## 4. Where in-memory SQLite is used
 
 In exactly one place that runs: **the test suite**. Everything else is a guard or a
 comment about it.
@@ -81,7 +126,7 @@ comment about it.
 | `.env`, `.env.example` — the comment on the `DATABASE_URL` line | Advertises the option |
 
 The application itself never runs on an in-memory database — not locally, not in the
-tests, not in deployment. See § 5 for why it cannot.
+tests, not in deployment. See § 6 for why it cannot.
 
 ### The test fixture
 
@@ -117,7 +162,7 @@ What the fixture is used to assert:
 
 ---
 
-## 4. What in-memory mode does not get
+## 5. What in-memory mode does not get
 
 - **No pool sizing.** `SingletonThreadPool` has no overflow to configure, and the test
   suite needs none — it overrides `get_db` with a single session.
@@ -134,7 +179,7 @@ What the fixture is used to assert:
 
 ---
 
-## 5. Do not run the application on an in-memory URL
+## 6. Do not run the application on an in-memory URL
 
 Setting `DATABASE_URL=sqlite:///:memory:` and starting the API imports cleanly — the guard
 in § 2 sees to that — and then fails on the first request that touches a table:
@@ -161,7 +206,7 @@ A file path gets `QueuePool`, the sized pool and WAL, exactly like `monitoring.d
 
 ---
 
-## 6. Checking any of this yourself
+## 7. Checking any of this yourself
 
 ```bash
 # Which pool class a URL gets
@@ -170,17 +215,20 @@ python -c "from sqlalchemy import create_engine; print(type(create_engine('sqlit
 # What the running application decided
 python -c "from app.database import IS_SQLITE, IS_MEMORY_SQLITE, engine; print(IS_SQLITE, IS_MEMORY_SQLITE, type(engine.pool).__name__)"
 
+# What a session does on commit
+python -c "from app.database import SessionLocal; print(SessionLocal.kw['expire_on_commit'])"
+
 # That an in-memory database refuses WAL
 python -c "import sqlite3; print(sqlite3.connect(':memory:').execute('PRAGMA journal_mode=WAL').fetchone())"
 ```
 
 ---
 
-## 7. Related
+## 8. Related
 
 | Document | Why |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Startup, the SQLite pragmas and the pool sizing in context |
 | [ERD.md](ERD.md) | The tables this engine serves |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | The fixture that owns the in-memory database |
-| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | PERF-01 (WAL) and PERF-02 (pool sizing), with measurements |
+| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | PERF-01 (WAL), PERF-02 (pool sizing) and PERF-06 (`expire_on_commit`), with measurements |

@@ -168,6 +168,24 @@ the rule that keeps it safe is in
 Which pool class each `DATABASE_URL` gets, and why the in-memory mode belongs to the tests
 alone: [DATABASE.md](DATABASE.md).
 
+### The session factory
+
+`SessionLocal` is built with `expire_on_commit=False`
+([app/database.py](../../app/database.py)), so the rows a request has already loaded stay
+readable after it commits. On SQLAlchemy's default every `commit()` marks every loaded
+object expired, and the next attribute read re-fetches it — which is exactly what the
+monitoring scans do: they commit the alerts they recorded and then hand the instances they
+scanned to Pydantic, so serialising the response issued one `SELECT` per row returned. An
+`ADMIN` warnings scan cost 8 statements for 4 rows; it costs 4 now, and the count no
+longer grows with the result set.
+
+Nothing depends on the expiry it removes. The four functions that want post-commit state
+— `create_instance`, `update_status`, `create_client` and `resolve_alert` — call
+`db.refresh()` explicitly, and each still issues exactly the one `SELECT` it did before.
+Sessions are per-request (`get_db` opens one and closes it after the response), so a
+retained value never outlives the request that loaded it. Background:
+[../performance/PERFORMANCE_BUGS.md § PERF-06](../performance/PERFORMANCE_BUGS.md#perf-06).
+
 ---
 
 ## 6. Configuration

@@ -104,12 +104,12 @@ these three objects. Once you know them, no later function contains a magic numb
 
 | # | Symbol | Line | What to take away |
 |---:|---|---|---|
-| 8 | `engine`, `SessionLocal`, `Base` | [database.py:37](../../app/database.py#L37) | `check_same_thread=False` is applied only for SQLite; the pool is sized to 40 connections — one per FastAPI threadpool worker, [../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02); `Base` is the SQLAlchemy 2.0 `DeclarativeBase` every model inherits. |
-| 9 | `_set_sqlite_pragmas` | [database.py:44](../../app/database.py#L44) | Registered on the engine's `connect` event, and only for SQLite: puts each connection in WAL mode with `synchronous=NORMAL` so a writer never blocks readers. Why it exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
-| 10 | `get_db` | [database.py:64](../../app/database.py#L64) | A generator dependency: yields a session, closes it in `finally`. |
+| 8 | `engine`, `SessionLocal`, `Base` | [database.py:37](../../app/database.py#L37) | `check_same_thread=False` is applied only for SQLite; the pool is sized to 40 connections — one per FastAPI threadpool worker, [../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02). `SessionLocal` sets `expire_on_commit=False`, so a commit does not force a re-`SELECT` of every row the request loaded — [§ PERF-06](../performance/PERFORMANCE_BUGS.md#perf-06). `Base` is the SQLAlchemy 2.0 `DeclarativeBase` every model inherits. |
+| 9 | `_set_sqlite_pragmas` | [database.py:52](../../app/database.py#L52) | Registered on the engine's `connect` event, and only for SQLite: puts each connection in WAL mode with `synchronous=NORMAL` so a writer never blocks readers. Why it exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
+| 10 | `get_db` | [database.py:72](../../app/database.py#L72) | A generator dependency: yields a session, closes it in `finally`. |
 
 **The idea worth carrying forward:** `get_db` is the seam the tests use. In
-[tests/conftest.py:52](../../tests/conftest.py#L52) it is replaced by a session bound to an
+[tests/conftest.py:56](../../tests/conftest.py#L56) it is replaced by a session bound to an
 in-memory database — which is why the whole suite runs with no file, no server and no
 cleanup. Every controller takes `db: Session = Depends(get_db)`, so overriding this one
 function redirects the entire application.
@@ -407,7 +407,7 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 |---:|---|---|---|
 | 75 | `memoised_seed_hashing` | [conftest.py:16](../../tests/conftest.py#L16) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
 | 76 | `api` | [conftest.py:33](../../tests/conftest.py#L33) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
-| 77 | `auth_headers` | [conftest.py:68](../../tests/conftest.py#L68) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
+| 77 | `auth_headers` | [conftest.py:72](../../tests/conftest.py#L72) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
 
 Then read the suites in the same order as this document:
 

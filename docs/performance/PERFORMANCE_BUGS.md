@@ -1,9 +1,10 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Five — [PERF-01](#perf-01),
-[PERF-02](#perf-02), [PERF-03](#perf-03), [PERF-04](#perf-04) and [PERF-05](#perf-05) —
-have since been fixed; the **Status** column below says which are still open.
+findings, ranked by the load at which they start to hurt. Six — [PERF-01](#perf-01),
+[PERF-02](#perf-02), [PERF-03](#perf-03), [PERF-04](#perf-04), [PERF-05](#perf-05) and
+[PERF-06](#perf-06) — have since been fixed; the **Status** column below says which are
+still open.
 
 Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
@@ -24,7 +25,7 @@ challenged.
 | [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | **Fixed** |
 | [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | **Fixed** |
 | [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | **Fixed** |
-| [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | Open |
+| [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | **Fixed** |
 | [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | Open |
 | [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | Open |
 | [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | Open |
@@ -83,7 +84,7 @@ not.
    flag.)
 
 2. **WAL and a relaxed sync mode**, set on every SQLite connection by `_set_sqlite_pragmas`
-   ([database.py:16](../../app/database.py#L16)):
+   ([database.py:52](../../app/database.py#L52)):
 
    ```
    journal_mode = wal
@@ -116,9 +117,12 @@ followed by ten repeat polls of each endpoint:
 The first scan still commits — it has real alerts to write. Every poll after it is a pure
 read. All 104 functional tests pass unchanged.
 
-What this does **not** fix: the commit that does happen still expires the result set
-([PERF-06](#perf-06)). The per-instance dedup `SELECT` this left in place has since been
-batched ([PERF-05](#perf-05)).
+What this did **not** fix at the time: the commit that does happen still expired the
+result set ([PERF-06](#perf-06)), and the per-instance dedup `SELECT` it left in place was
+still one statement per instance ([PERF-05](#perf-05)). Both have since been fixed. One
+side effect of this fix is worth naming, because it changed what PERF-06 costs: a repeat
+poll no longer commits, so it no longer expires anything either — after this landed, the
+post-commit refreshes were confined to the scans that actually record an alert.
 
 ---
 
@@ -414,7 +418,7 @@ queries** for a response of 4 rows:
 1 × SELECT instances          (the actual work)
 4 × SELECT alerts             <- dedup probe, one per matching instance
 4 × INSERT INTO alerts        <- one statement per alert
-4 × SELECT instances          <- see PERF-06
+4 × SELECT instances          <- see PERF-06, fixed since
 ```
 
 Two of those groups scale with the result size. At 500 warning instances this is 500
@@ -474,13 +478,15 @@ The `ADMIN` warnings scan, statement for statement, is now:
 1 × SELECT instances          (the actual work)
 1 × SELECT alerts             <- dedup probe, one for the whole scan
 1 × INSERT INTO alerts        <- one executemany, 4 rows
-4 × SELECT instances          <- see PERF-06
+4 × SELECT instances          <- see PERF-06, fixed since — the scan is 4 statements now
 ```
 
 The two groups that scaled with the result set are now fixed at one statement each. At
 500 warning instances the scan issues 3 statements plus the [PERF-06](#perf-06) refreshes
 instead of 1,002 — and the repeat poll, which is the case a dashboard actually generates,
-is 3 statements no matter how many instances match.
+is 3 statements no matter how many instances match. (Those refreshes are gone too since
+PERF-06 was fixed, which is why the "statements after" column above reads 4 rather than 8
+on the current code.)
 
 All 104 functional tests pass unchanged, including the dedup coverage in
 [tests/test_member_c.py](../../tests/test_member_c.py): repeat scans that must not
@@ -488,39 +494,113 @@ duplicate, and the resolve-then-rescan that must open a fresh alert for one inst
 while leaving the others deduplicated — the partial case that a batched probe has to get
 right.
 
-What this does **not** fix: the trailing per-row refresh is [PERF-06](#perf-06), which is
-now the only group in that trace that still scales with the result set, and the endpoints
-remain unbounded in what they return ([PERF-07](#perf-07)).
+What this did **not** fix: the trailing per-row refresh, which was left as the only group
+in that trace still scaling with the result set — that is [PERF-06](#perf-06), fixed since.
+The endpoints remain unbounded in what they return ([PERF-07](#perf-07)).
 
 ---
 
 ### PERF-06
 
 **`commit()` expires the result set, so serialization re-SELECTs every row.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-5) at the end of this finding.
 
-`SessionLocal` is built without `expire_on_commit=False`
-([database.py:10](../../app/database.py#L10)), so `db.commit()` marks every loaded object
+`SessionLocal` was built without `expire_on_commit=False`
+([database.py](../../app/database.py)), so `db.commit()` marked every loaded object
 expired. The monitoring endpoints commit and then **return** the instances they just
-loaded — and Pydantic reading `instance.instanceName` for the response triggers a refresh
+loaded — and Pydantic reading `instance.instanceName` for the response triggered a refresh
 `SELECT` for each one.
 
 This is the trailing `4 × SELECT instances` in the [PERF-05](#perf-05) trace — the one
 group there that batching did not remove.
 
-It happens even when nothing was written. Measured, `CLIENT_MANAGER
-GET /api/monitor/warnings` after the alerts already exist — 7 queries, **0 inserts**:
-
-```
-1 × SELECT members     1 × SELECT clients     1 × SELECT instances
-2 × SELECT alerts      (dedup, both hit)
-2 × SELECT instances   <- pure waste: nothing changed, rows just got expired
-```
-
-One wasted round trip per row returned, on a code path that writes nothing.
+One wasted round trip per row returned, and the count grew with the result set: at 500
+warning instances, a scan paid 500 refreshes to serialize rows it had already loaded.
 
 **Fix.** `sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)`.
 Nothing in this codebase relies on post-commit expiry — `update_status` and `resolve_alert`
 already call `db.refresh()` explicitly where they want fresh state.
+
+#### The fix that landed
+
+The one-line fix, as proposed
+([database.py:44](../../app/database.py#L44)):
+
+```python
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, expire_on_commit=False, bind=engine
+)
+```
+
+`tests/conftest.py` builds its own session factory and got the same argument, so the suite
+exercises the session semantics the application runs on rather than SQLAlchemy's defaults.
+
+**Nothing depends on the expiry it removes**, which is what makes this safe rather than
+merely cheap. Four functions want state back from the database after their commit —
+`create_instance`, `update_status`, `create_client` and `resolve_alert` — and every one of
+them calls `db.refresh()` explicitly on the line after `db.commit()`. They were not relying
+on the implicit reload; they were paying for it twice over on the default, since the refresh
+they asked for made the expiry redundant. Measured, each of those endpoints issues exactly
+the same statements it did before. Sessions are per-request — `get_db` opens one and closes
+it after the response — so no unexpired value survives into another request.
+
+Measured with the same statement-logging harness as the rest of this document, on the same
+16-instance seed:
+
+| Request | Rows | Statements before | Statements after |
+|---|---|---|---|
+| `ADMIN /api/monitor/warnings`, first scan | 4 | 8 | **4** |
+| `ADMIN /api/monitor/errors`, first scan | 2 | 6 | **4** |
+| `ADMIN /api/monitor/long-stopped`, first scan | 3 | 7 | **4** |
+| `CLIENT_MANAGER /api/monitor/warnings`, first scan | 2 | 7 | **5** |
+| `CLIENT_MANAGER /api/monitor/errors`, first scan | 2 | 7 | **5** |
+| `CLIENT_MANAGER /api/monitor/long-stopped`, first scan | 2 | 7 | **5** |
+
+The `ADMIN` warnings scan, statement for statement, is now:
+
+```
+1 × SELECT members            (auth)
+1 × SELECT instances          (the actual work)
+1 × SELECT alerts             <- dedup probe, one for the whole scan (PERF-05)
+1 × INSERT INTO alerts        <- one executemany, 4 rows (PERF-05)
+                              <- the 4 refreshes are gone
+```
+
+Four statements for a scan of any size. Together with [PERF-05](#perf-05) this closes the
+last group in that trace that scaled with the result set: at 500 warning instances the
+first scan now issues 4 statements rather than 1,502.
+
+**One correction to the finding above**, which was written before [PERF-01](#perf-01)
+landed. It claimed the waste "happens even when nothing was written", and quoted a
+`CLIENT_MANAGER` repeat poll costing 7 queries with 0 inserts. That is no longer the
+shape of a repeat poll: since PERF-01 a scan that records nothing does not commit, and
+without a commit there is no expiry to pay for. Re-measured on the current code, a repeat
+poll costs 3 statements as `ADMIN` and 4 as `CLIENT_MANAGER` — **with and without this
+fix**. The refreshes this fix removes were confined to the first scan, the one that
+actually writes. The finding was real and the fix is worth having; its blast radius was
+smaller than the original text says.
+
+The endpoints where the count is unchanged, measured rather than assumed:
+
+| Request | Statements before | after |
+|---|---|---|
+| `POST /api/instances` | 4 | 4 |
+| `PATCH /api/instances/1/status` | 5 | 5 |
+| `PATCH /api/alerts/1/resolve` | 6 | 6 |
+| `POST /api/clients` | 4 | 4 |
+| `ADMIN /api/monitor/report` | 5 | 5 |
+
+The four writes each end in an explicit `db.refresh()`, which is one `SELECT` either way.
+`build_report` never commits, so it never had anything to expire.
+
+All 104 functional tests pass unchanged — including the ones that read the session
+directly after a request (`db.get(Instance, 1) is None` after a delete, the `updatedAt`
+comparison across an idempotent update), which are the assertions a change to expiry
+semantics would break first.
+
+What this does **not** fix: the endpoints still return every matching row
+([PERF-07](#perf-07)), so the *response* still grows without bound even though the
+statement count no longer does.
 
 ---
 
@@ -735,7 +815,7 @@ Ordered by benefit per unit of risk, not by severity.
 | # | Change | Findings closed | Risk |
 |---|---|---|---|
 | 1 | Add the missing indexes | [PERF-04](#perf-04) | None — additive — **done** |
-| 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low |
+| 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low — **done** |
 | 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
 | 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low — **done** |
 | 5 | Timeout and retry cap on the Anthropic client, and the session released before the call | [PERF-03](#perf-03) | Low — **done** |
@@ -779,6 +859,17 @@ repeat polls and the resolve-then-rescan path with `ID_BATCH_SIZE` forced to 1, 
 against the default 500: identical instances, identical alert counts, identical dedup
 outcome at every size.
 
+The before/after counts under [PERF-06](#perf-06) come from the same listener, run twice
+in one process over two session factories built on the same seed — one with
+`expire_on_commit=True`, the SQLAlchemy default and the schema as it was, one with it
+`False` — so both columns are measured rather than one being remembered. Each pair gets a
+fresh in-memory database, and each endpoint is driven twice: a first scan, which records
+alerts and therefore commits, and a repeat poll, which does not. That second call is what
+showed the finding's "even when nothing was written" paragraph to be stale since
+[PERF-01](#perf-01) — the repeat poll's count is identical under both settings. The
+unchanged rows in the second table there (`POST /api/instances`, the two `PATCH`es,
+`POST /api/clients`, the report) were measured the same way rather than reasoned about.
+
 **Query plans** — `EXPLAIN QUERY PLAN` on the statements that listener captured, run
 against the seeded schema. The before/after pairs under [PERF-04](#perf-04) come from two
 engines built in the same process on that same seed — one from the metadata as it stands,
@@ -820,9 +911,10 @@ the stand-in for the network call at the same instant; one of them reads
 is the before/after table under [PERF-03](#perf-03).
 
 Caveats worth stating: the counts come from the 16-instance seed, so absolute numbers are
-small — what matters is which of them **scale with the result set**
-([PERF-06](#perf-06), [PERF-07](#perf-07); [PERF-05](#perf-05) was one until it was
-batched). The query plans are
+small — what matters is which of them **scale with the result set**. Only
+[PERF-07](#perf-07) still does; [PERF-05](#perf-05) and [PERF-06](#perf-06) both did until
+they were fixed, and a monitoring scan is now a fixed statement count at any size. The
+query plans are
 SQLite's; a different backend would plan differently, and would choose its own indexes
 from the ones [PERF-04](#perf-04) declares. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
 connection-pool level rather than through the API, and the 30-minute figure in

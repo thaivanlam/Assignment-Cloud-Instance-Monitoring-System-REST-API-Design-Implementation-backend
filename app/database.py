@@ -35,7 +35,15 @@ pool_args = (
 )
 
 engine = create_engine(settings.DATABASE_URL, connect_args=connect_args, **pool_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# `expire_on_commit=False` keeps the rows a request already loaded readable after its
+# commit. On the default (True) every commit marks every loaded object expired, so the
+# monitoring endpoints — which commit and then return the instances they just scanned —
+# paid one refresh SELECT per row while serialising the response. The services that do
+# want post-commit state (`update_status`, `resolve_alert`, `create_*`) already call
+# `db.refresh()` explicitly. See docs/performance/PERFORMANCE_BUGS.md § PERF-06.
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, expire_on_commit=False, bind=engine
+)
 
 
 if IS_SQLITE:
