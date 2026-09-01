@@ -1,9 +1,9 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Four — [PERF-01](#perf-01),
-[PERF-02](#perf-02), [PERF-03](#perf-03) and [PERF-04](#perf-04) — have since been fixed;
-the **Status** column below says which are still open.
+findings, ranked by the load at which they start to hurt. Five — [PERF-01](#perf-01),
+[PERF-02](#perf-02), [PERF-03](#perf-03), [PERF-04](#perf-04) and [PERF-05](#perf-05) —
+have since been fixed; the **Status** column below says which are still open.
 
 Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
@@ -23,7 +23,7 @@ challenged.
 | [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical | **Fixed** |
 | [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | **Fixed** |
 | [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | **Fixed** |
-| [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | Open |
+| [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | **Fixed** |
 | [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | Open |
 | [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | Open |
 | [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | Open |
@@ -76,9 +76,11 @@ Two of the three fixes originally proposed here were applied; the third was deli
 not.
 
 1. **Commit only when something changed.** `_record_alert` already returned `True`/`False`,
-   so the three scans now collect that and hand it to `_commit_if_recorded`
-   ([monitor_service.py:33](../../app/services/monitor_service.py#L33)). A scan that opens
-   no new alert never commits, and never takes a write lock.
+   so the three scans collect that and hand it to `_commit_if_recorded`
+   ([monitor_service.py:70](../../app/services/monitor_service.py#L70)). A scan that opens
+   no new alert never commits, and never takes a write lock. (The recording helper is
+   `_record_alerts`, one call per scan, since [PERF-05](#perf-05); it returns the same
+   flag.)
 
 2. **WAL and a relaxed sync mode**, set on every SQLite connection by `_set_sqlite_pragmas`
    ([database.py:16](../../app/database.py#L16)):
@@ -114,9 +116,9 @@ followed by ten repeat polls of each endpoint:
 The first scan still commits — it has real alerts to write. Every poll after it is a pure
 read. All 104 functional tests pass unchanged.
 
-What this does **not** fix: the scans still issue one dedup `SELECT` per instance
-([PERF-05](#perf-05)), and the commit that does happen still expires the result set
-([PERF-06](#perf-06)).
+What this does **not** fix: the commit that does happen still expires the result set
+([PERF-06](#perf-06)). The per-instance dedup `SELECT` this left in place has since been
+batched ([PERF-05](#perf-05)).
 
 ---
 
@@ -286,9 +288,9 @@ else. SQLite does not index foreign keys automatically.
 | `list_alerts` (join + order) | `SCAN alerts` + `USE TEMP B-TREE FOR ORDER BY` |
 
 Every list endpoint is O(table). The `clients` scan runs on **every** request made by a
-`CLIENT_MANAGER` ([PERF-10](#perf-10)); the `alerts` scan runs once per instance inside
-the monitoring endpoints ([PERF-05](#perf-05)), so the two compound into O(instances ×
-alerts).
+`CLIENT_MANAGER` ([PERF-10](#perf-10)); the `alerts` scan ran once per instance inside the
+monitoring endpoints (the N+1 [PERF-05](#perf-05) has since batched), so the two compounded
+into O(instances × alerts).
 
 **Fix.** The columns that are actually filtered and sorted on:
 
@@ -386,22 +388,23 @@ where there is no `clientId` filter to lead with:
   `ix_instances_clientId_status`, and a third index on `instances` for the unscoped case
   alone did not earn its write cost.
 
-Indexing also does nothing about the *number* of queries. The dedup probe is a seek rather
-than a scan now, but it is still one statement per instance ([PERF-05](#perf-05)); the
-count query still sorts in order to count ([PERF-08](#perf-08)); and `list_alerts` still
-joins `instances` when nothing needs the join ([PERF-09](#perf-09)).
+Indexing also does nothing about the *number* of queries. It made the dedup probe a seek
+rather than a scan, but left it one statement per instance — that is [PERF-05](#perf-05),
+fixed separately and since. The count query still sorts in order to count
+([PERF-08](#perf-08)), and `list_alerts` still joins `instances` when nothing needs the
+join ([PERF-09](#perf-09)).
 
 ---
 
 ### PERF-05
 
 **Alert deduplication issues one SELECT per instance.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-4) at the end of this finding.
 
-`_record_alert` calls `_has_unresolved_alert`
-([monitor_service.py:27](../../app/services/monitor_service.py#L27)) inside a per-instance
-loop, and each call is its own `SELECT … LIMIT 1`. [PERF-04](#perf-04) has since turned
-each one into an index seek rather than a full `alerts` scan, but their *number* is
-unchanged: still one round trip per instance.
+`_record_alert` called `_has_unresolved_alert` inside a per-instance loop, and each call
+was its own `SELECT … LIMIT 1`. [PERF-04](#perf-04) had already turned each one into an
+index seek rather than a full `alerts` scan, but their *number* was unchanged: one round
+trip per instance, and one `INSERT` per alert beside it.
 
 Measured, `ADMIN GET /api/monitor/warnings` against the 16 seeded instances — **14
 queries** for a response of 4 rows:
@@ -415,22 +418,79 @@ queries** for a response of 4 rows:
 ```
 
 Two of those groups scale with the result size. At 500 warning instances this is 500
-dedup scans plus 500 individual inserts.
+dedup probes plus 500 individual inserts.
 
-**Fix.** One query for the whole set, then one bulk insert:
+#### The fix that landed
 
-```python
-existing = {
-    row[0] for row in db.query(Alert.instanceId).filter(
-        Alert.instanceId.in_([i.id for i in instances]),
-        Alert.alertType == alert_type,
-        Alert.isResolved.is_(False),
-    )
-}
-db.add_all([Alert(...) for inst in instances if inst.id not in existing])
+The dedup rule is unchanged — same guard, same `(instanceId, alertType, isResolved)`
+condition, same behaviour through the API. What changed is that the whole scan is now
+one probe and one insert instead of two statements per instance
+([monitor_service.py:35](../../app/services/monitor_service.py#L35)):
+
+1. **One dedup probe for the scan.** `_instances_with_unresolved_alert` selects
+   `Alert.instanceId` for every id in the scan at once and returns them as a set;
+   `_record_alerts` builds the new alerts from the instances missing from it. It is the
+   same index seek [PERF-04](#perf-04) enabled, over an `IN` list rather than one id.
+
+2. **One `INSERT` for the batch.** The inserts go through a Core
+   `db.execute(insert(Alert), [...])` rather than `db.add_all`. That distinction is not
+   stylistic: the ORM has to read back the generated `id` of every row it inserts, and
+   SQLite's `RETURNING` does not guarantee the order rows come back in, so SQLAlchemy
+   cannot correlate them and falls back to **one statement per object** — measured,
+   `add_all` still emitted 4 `INSERT`s for 4 alerts. Nothing in a scan uses the alert
+   rows once they are written (the endpoint returns instances), so the ids are not
+   needed, and without them the batch goes out as a single `executemany`. `isResolved`
+   and `detectedAt` still come from the column defaults declared on the model, evaluated
+   per row exactly as before.
+
+3. **The `IN` list is chunked** at `ID_BATCH_SIZE = 500`
+   ([monitor_service.py:14](../../app/services/monitor_service.py#L14)). SQLite refuses
+   a statement with more than 32,766 bind parameters, and these endpoints have no upper
+   bound on how many instances they return ([PERF-07](#perf-07)) — one query per 500 ids
+   keeps the statement preparable at any scan size while staying O(1) round trips for
+   every realistic one.
+
+`_commit_if_recorded` is untouched: `_record_alerts` returns whether it created anything,
+and a scan that created nothing still ends without a commit ([PERF-01](#perf-01)).
+
+Measured with the same statement-logging harness as the rest of this document, on the
+same 16-instance seed:
+
+| Request | Rows | Statements before | Statements after |
+|---|---|---|---|
+| `ADMIN /api/monitor/warnings`, first scan | 4 | 14 | **8** |
+| `ADMIN /api/monitor/warnings`, repeat poll | 4 | 6 | **3** |
+| `ADMIN /api/monitor/errors`, first scan | 2 | 8 | **6** |
+| `ADMIN /api/monitor/errors`, repeat poll | 2 | 4 | **3** |
+| `ADMIN /api/monitor/long-stopped`, first scan | 3 | 11 | **7** |
+| `ADMIN /api/monitor/long-stopped`, repeat poll | 3 | 5 | **3** |
+| `CLIENT_MANAGER /api/monitor/warnings`, first scan | 2 | 9 | **7** |
+| `CLIENT_MANAGER /api/monitor/warnings`, repeat poll | 2 | 5 | **4** |
+
+The `ADMIN` warnings scan, statement for statement, is now:
+
+```
+1 × SELECT members            (auth)
+1 × SELECT instances          (the actual work)
+1 × SELECT alerts             <- dedup probe, one for the whole scan
+1 × INSERT INTO alerts        <- one executemany, 4 rows
+4 × SELECT instances          <- see PERF-06
 ```
 
-Three statements total, regardless of how many instances match.
+The two groups that scaled with the result set are now fixed at one statement each. At
+500 warning instances the scan issues 3 statements plus the [PERF-06](#perf-06) refreshes
+instead of 1,002 — and the repeat poll, which is the case a dashboard actually generates,
+is 3 statements no matter how many instances match.
+
+All 104 functional tests pass unchanged, including the dedup coverage in
+[tests/test_member_c.py](../../tests/test_member_c.py): repeat scans that must not
+duplicate, and the resolve-then-rescan that must open a fresh alert for one instance
+while leaving the others deduplicated — the partial case that a batched probe has to get
+right.
+
+What this does **not** fix: the trailing per-row refresh is [PERF-06](#perf-06), which is
+now the only group in that trace that still scales with the result set, and the endpoints
+remain unbounded in what they return ([PERF-07](#perf-07)).
 
 ---
 
@@ -444,7 +504,8 @@ expired. The monitoring endpoints commit and then **return** the instances they 
 loaded — and Pydantic reading `instance.instanceName` for the response triggers a refresh
 `SELECT` for each one.
 
-This is the trailing `4 × SELECT instances` in the [PERF-05](#perf-05) trace.
+This is the trailing `4 × SELECT instances` in the [PERF-05](#perf-05) trace — the one
+group there that batching did not remove.
 
 It happens even when nothing was written. Measured, `CLIENT_MANAGER
 GET /api/monitor/warnings` after the alerts already exist — 7 queries, **0 inserts**:
@@ -678,14 +739,14 @@ Ordered by benefit per unit of risk, not by severity.
 | 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
 | 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low — **done** |
 | 5 | Timeout and retry cap on the Anthropic client, and the session released before the call | [PERF-03](#perf-03) | Low — **done** |
-| 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule |
+| 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule — **done** |
 | 7 | Count without the sort; conditional join | [PERF-08](#perf-08), [PERF-09](#perf-09) | Low |
 | 8 | Scope filter as a subquery; drop the lazy loads | [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
 | 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract |
 
 Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
-touches a rule documented in [../business-rules/ALERTING.md](../business-rules/ALERTING.md)
-and must keep the dedup guarantee intact. Step 9 changes response shapes and needs
+touched a rule documented in [../business-rules/ALERTING.md](../business-rules/ALERTING.md)
+and kept the dedup guarantee intact — same guard, fewer statements. Step 9 changes response shapes and needs
 [../api/CONVENTIONS.md](../api/CONVENTIONS.md) and
 [../api/ENDPOINTS.md](../api/ENDPOINTS.md) updated in the same commit.
 
@@ -706,6 +767,17 @@ logging every statement while driving endpoints through `TestClient` as both `AD
 def record(conn, cursor, statement, params, context, executemany):
     log.append(" ".join(statement.split()))
 ```
+
+The before/after counts under [PERF-05](#perf-05) come from that same listener with the
+pre-fix `_record_alerts` — the per-instance loop, restored as a monkeypatch — swapped in
+for one half of each pair, so both columns are measured on the same seed in the same
+process rather than one being remembered. The claim that `db.add_all` does *not* batch on
+SQLite is read off the listener too: `executemany` is `True` on those inserts, yet it
+fires once per row, because SQLAlchemy cannot correlate SQLite's `RETURNING` rows back to
+the objects it inserted. The chunked `IN` list was checked by driving the scans, the
+repeat polls and the resolve-then-rescan path with `ID_BATCH_SIZE` forced to 1, 2 and 3
+against the default 500: identical instances, identical alert counts, identical dedup
+outcome at every size.
 
 **Query plans** — `EXPLAIN QUERY PLAN` on the statements that listener captured, run
 against the seeded schema. The before/after pairs under [PERF-04](#perf-04) come from two
@@ -749,7 +821,8 @@ is the before/after table under [PERF-03](#perf-03).
 
 Caveats worth stating: the counts come from the 16-instance seed, so absolute numbers are
 small — what matters is which of them **scale with the result set**
-([PERF-05](#perf-05), [PERF-06](#perf-06), [PERF-07](#perf-07)). The query plans are
+([PERF-06](#perf-06), [PERF-07](#perf-07); [PERF-05](#perf-05) was one until it was
+batched). The query plans are
 SQLite's; a different backend would plan differently, and would choose its own indexes
 from the ones [PERF-04](#perf-04) declares. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
 connection-pool level rather than through the API, and the 30-minute figure in

@@ -1,32 +1,69 @@
+from collections.abc import Callable
 from datetime import timedelta
 
-from sqlalchemy import func
+from sqlalchemy import func, insert
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Alert, AlertType, Instance, InstanceStatus
 from app.models.models import utcnow
 
+# The dedup probe reads every instance id of a scan in one statement. SQLite caps a
+# statement at 32766 bind parameters, so the ids go in batches — one query per batch
+# instead of one per instance, and never a statement that cannot be prepared.
+ID_BATCH_SIZE = 500
 
-def _has_unresolved_alert(db: Session, instance_id: int, alert_type: AlertType) -> bool:
-    return (
-        db.query(Alert)
-        .filter(
-            Alert.instanceId == instance_id,
-            Alert.alertType == alert_type,
-            Alert.isResolved.is_(False),
+
+def _instances_with_unresolved_alert(
+    db: Session, instance_ids: list[int], alert_type: AlertType
+) -> set[int]:
+    """The subset of `instance_ids` that already carries an unresolved alert of this type."""
+    found: set[int] = set()
+    for start in range(0, len(instance_ids), ID_BATCH_SIZE):
+        batch = instance_ids[start : start + ID_BATCH_SIZE]
+        found.update(
+            row[0]
+            for row in db.query(Alert.instanceId).filter(
+                Alert.instanceId.in_(batch),
+                Alert.alertType == alert_type,
+                Alert.isResolved.is_(False),
+            )
         )
-        .first()
-        is not None
-    )
+    return found
 
 
-def _record_alert(db: Session, instance: Instance, alert_type: AlertType, message: str) -> bool:
-    """Records an alert unless an unresolved one of the same type already exists.
-    Returns True if a new alert was created."""
-    if _has_unresolved_alert(db, instance.id, alert_type):
+def _record_alerts(
+    db: Session,
+    instances: list[Instance],
+    alert_type: AlertType,
+    message: Callable[[Instance], str],
+) -> bool:
+    """Records one alert per instance that has no unresolved alert of this type yet.
+
+    The dedup rule is unchanged (docs/business-rules/ALERTING.md § 3) — an instance with
+    an open alert of the same type is still skipped. What changed is the number of
+    statements: the whole scan is checked in one query rather than one per instance, and
+    the new alerts are inserted as a batch. See docs/performance/PERFORMANCE_BUGS.md
+    § PERF-05.
+
+    Returns True if at least one new alert was created.
+    """
+    if not instances:
         return False
-    db.add(Alert(instanceId=instance.id, alertType=alert_type, message=message))
+    existing = _instances_with_unresolved_alert(db, [i.id for i in instances], alert_type)
+    new_alerts = [
+        {"instanceId": inst.id, "alertType": alert_type, "message": message(inst)}
+        for inst in instances
+        if inst.id not in existing
+    ]
+    if not new_alerts:
+        return False
+    # A Core insert rather than `db.add_all`: the ORM cannot batch inserts that need
+    # their generated ids back on SQLite, so `add_all` would still be one statement per
+    # alert. Nothing here uses the rows once written — the scan returns instances — so
+    # the ids are not needed and the whole batch goes in one executemany. `isResolved`
+    # and `detectedAt` still come from the column defaults declared on the model.
+    db.execute(insert(Alert), new_alerts)
     return True
 
 
@@ -52,13 +89,13 @@ def check_warnings(db: Session, client_ids: list[int] | None) -> list[Instance]:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
     instances = query.order_by(Instance.id).all()
 
-    recorded = False
-    for inst in instances:
-        recorded = _record_alert(
-            db, inst, AlertType.CPU_HIGH,
+    recorded = _record_alerts(
+        db, instances, AlertType.CPU_HIGH,
+        lambda inst: (
             f"CPU usage {inst.cpuUsage:.1f}% >= {settings.CPU_WARNING_THRESHOLD:.0f}% "
-            f"on instance '{inst.instanceName}' ({inst.region})",
-        ) or recorded
+            f"on instance '{inst.instanceName}' ({inst.region})"
+        ),
+    )
     _commit_if_recorded(db, recorded)
     return instances
 
@@ -70,12 +107,12 @@ def check_errors(db: Session, client_ids: list[int] | None) -> list[Instance]:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
     instances = query.order_by(Instance.id).all()
 
-    recorded = False
-    for inst in instances:
-        recorded = _record_alert(
-            db, inst, AlertType.ERROR_DETECTED,
-            f"[CRITICAL] Instance '{inst.instanceName}' ({inst.region}) is in ERROR state",
-        ) or recorded
+    recorded = _record_alerts(
+        db, instances, AlertType.ERROR_DETECTED,
+        lambda inst: (
+            f"[CRITICAL] Instance '{inst.instanceName}' ({inst.region}) is in ERROR state"
+        ),
+    )
     _commit_if_recorded(db, recorded)
     return instances
 
@@ -93,14 +130,14 @@ def check_long_stopped(db: Session, client_ids: list[int] | None) -> list[Instan
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
     instances = query.order_by(Instance.id).all()
 
-    recorded = False
-    for inst in instances:
+    def stopped_message(inst: Instance) -> str:
         hours = (now - inst.updatedAt).total_seconds() / 3600
-        recorded = _record_alert(
-            db, inst, AlertType.LONG_STOPPED,
+        return (
             f"Instance '{inst.instanceName}' has been STOPPED for {hours:.0f} hours "
-            f"(>= {settings.LONG_STOPPED_HOURS}h)",
-        ) or recorded
+            f"(>= {settings.LONG_STOPPED_HOURS}h)"
+        )
+
+    recorded = _record_alerts(db, instances, AlertType.LONG_STOPPED, stopped_message)
     _commit_if_recorded(db, recorded)
     return instances
 
