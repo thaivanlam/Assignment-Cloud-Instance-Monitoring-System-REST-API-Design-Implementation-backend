@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--docs-sync-check) | Docs-sync check | The documentation rule is reminded at commit time, not only written down |
 | [2026-09-01](#2026-09-01--screenshots-follow-the-api) | Screenshots follow the API | Swagger captures are re-taken in the commit that invalidates them |
 | [2026-09-01](#2026-09-01--database-engine-document) | Database engine document | Which pool each `DATABASE_URL` gets, and where in-memory SQLite is used |
 | [2026-08-31](#2026-08-31--perf-02-fixed-the-connection-pool-matches-the-request-concurrency) | PERF-02 fixed | The pool serves 40 concurrent requests instead of 15 |
@@ -32,6 +33,54 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Docs-sync check
+
+One commit turning rule 3 into a commit-time reminder. No application source changed.
+
+### Added
+
+- **[../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py)** — reads the
+  staged paths, applies the § 5 source → document mapping, and names the documents that
+  were not staged beside the code. It **warns and lets the commit through**: the rule
+  asks for a document when *behaviour* changes, and no script can tell a behaviour change
+  from a rename, so it reports candidates and leaves the judgement to the author. Beyond
+  the mapping it reminds about the four conditional documents — the Swagger captures for
+  a source that can alter a response, [CHANGELOG.md](CHANGELOG.md) and
+  [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) for any `app/` change, and
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) only when the staged
+  diff actually adds or removes a `def` or a `class`, since that document cites line
+  numbers. Staging any one of a source's mapped documents silences it for that source.
+- **[../../scripts/hooks/pre-commit](../../scripts/hooks/pre-commit)** — runs the script
+  for every contributor. Installed once per clone with
+  `git config core.hooksPath scripts/hooks`; the repository had no hook directory before
+  this, only git's `.sample` files. A first `.gitattributes` pins `scripts/hooks/*` to LF
+  endings — this clone has `core.autocrlf=true`, and a CRLF shebang line stops `sh` from
+  running the hook at all on macOS and Linux.
+- **A `PreToolUse` hook in [../../.claude/settings.json](../../.claude/settings.json)** —
+  runs the same script with `--hook` before any `git commit` an agent issues, and answers
+  with the warning as `systemMessage` and `additionalContext`. The settings file is
+  checked in, so this side needs no per-clone setup. The existing `WebFetch` permissions
+  are untouched.
+
+### Documentation
+
+- **Added rule 7, *The check that reminds you*, to
+  [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#7-the-check-that-reminds-you)**
+  — what the check does, why it warns instead of blocking, the two entry points and their
+  setup, and the requirement that a new mapping row lands in both the § 5 table and the
+  script's `MAPPING`. *Writing style* and *Related* renumbered to 8 and 9; the § 5 and § 6
+  anchors cited elsewhere are unchanged.
+- **Recorded it in the summaries that describe the rule set** — the *short version* and
+  *Related* table in [../contributing/README.md](../contributing/README.md),
+  *Conventions for these documents* in [../README.md](../README.md), and *Contributing*
+  plus the `scripts/` line of the project tree in the root
+  [README.md](../../README.md).
+- **Condensed it into [../../CLAUDE.md](../../CLAUDE.md)** next to the mapping, so an
+  agent knows both that the mapping has a second copy to keep in step and that the hook's
+  warning is a reminder to act on.
 
 ---
 
