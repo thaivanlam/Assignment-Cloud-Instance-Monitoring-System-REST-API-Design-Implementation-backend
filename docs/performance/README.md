@@ -11,7 +11,7 @@ it would take to fix.
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 104 tests pass and the API returns correct answers throughout. Three findings are rated
-critical, and all three are now fixed, as is the first of the high-severity ones:
+critical, and all three are now fixed, as are the first two of the high-severity ones:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -36,14 +36,20 @@ critical, and all three are now fixed, as is the first of the high-severity ones
   columns the API actually filters and sorts on; a sixth, on `alerts.isResolved`, was
   measured and rejected because it made the query it was meant to help slower
   ([../design/ERD.md § Indexes](../design/ERD.md#indexes)).
+- **PERF-05** — *fixed.* Alert dedup ran a `SELECT` per instance and an `INSERT` per
+  alert, so a scan's statement count grew with its result set. A scan now probes for
+  existing unresolved alerts once for all its instances and writes the new ones in a
+  single batched `INSERT` — an `ADMIN` warnings poll fell from 6 statements to 3, and a
+  first scan from 14 to 8. The dedup rule itself is unchanged
+  ([../business-rules/ALERTING.md](../business-rules/ALERTING.md)).
 
-The remaining eleven range from the per-instance dedup query (**PERF-05**) down to notes
-recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is correct
-as written and should not be changed.
+The remaining ten range from the post-commit re-`SELECT` per row (**PERF-06**) down to
+notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is
+correct as written and should not be changed.
 
 Every figure is measured against the seeded demo database, not estimated; the method is at
-the end of the document so any number can be reproduced. Four findings — PERF-01, PERF-02,
-PERF-03 and PERF-04 — have been fixed; the rest are recorded and still open.
+the end of the document so any number can be reproduced. Five findings — PERF-01, PERF-02,
+PERF-03, PERF-04 and PERF-05 — have been fixed; the rest are recorded and still open.
 
 ## Related
 
@@ -52,7 +58,7 @@ PERF-03 and PERF-04 — have been fixed; the rest are recorded and still open.
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | The layering and session handling the findings sit in |
 | [../design/ERD.md](../design/ERD.md) | The schema, and the indexes PERF-04 added to it |
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The diagnosis endpoint behind PERF-03 and PERF-14 |
-| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 must preserve |
+| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 had to preserve, and did |
 | [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention PERF-07 would extend |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Why a passing suite catches none of this |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Keeping this document current when a finding is fixed |

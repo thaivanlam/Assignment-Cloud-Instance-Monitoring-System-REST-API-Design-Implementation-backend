@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--perf-05-fixed-a-scan-dedups-in-one-query-and-writes-in-one-insert) | PERF-05 fixed | A monitoring scan costs three statements instead of two per instance |
 | [2026-09-01](#2026-09-01--perf-04-fixed-the-filtered-and-sorted-columns-are-indexed) | PERF-04 fixed | Every list endpoint seeks its rows instead of scanning the table |
 | [2026-09-01](#2026-09-01--perf-03-fixed-the-llm-call-is-bounded-and-holds-no-connection) | PERF-03 fixed | A diagnosis waits at most 60 s, and holds no database connection while it waits |
 | [2026-09-01](#2026-09-01--docs-sync-check) | Docs-sync check | The documentation rule is reminded at commit time, not only written down |
@@ -35,6 +36,55 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — PERF-05 fixed: a scan dedups in one query and writes in one insert
+
+The second high-severity performance finding closed. The alerting rule is unchanged — same
+guard, same alerts, same ordering — and all 104 tests pass unchanged.
+
+### Fixed
+
+- **Alert deduplication no longer runs one query per instance.** Each monitoring scan
+  called `_has_unresolved_alert` inside its loop, so a scan cost one `SELECT` per matching
+  instance plus one `INSERT` per alert — the statement count grew with the result set, on
+  the three endpoints a dashboard polls most often.
+  [../../app/services/monitor_service.py](../../app/services/monitor_service.py) now reads
+  back which of the scanned instances already carry an unresolved alert of that type in a
+  single query, and inserts the alerts for the rest as one batch. Measured on the seeded
+  demo data, an `ADMIN` `GET /api/monitor/warnings` fell from **14 statements to 8** on the
+  first scan and from **6 to 3** on the repeat poll — and the two groups that scaled with
+  the result set are now one statement each, so 500 matching instances would cost the same
+  three statements as four do.
+- **The batch insert is a Core `insert()`, not `add_all`.** The ORM has to read back the
+  generated `id` of every row it writes, and SQLite's `RETURNING` gives no order guarantee
+  to correlate them by, so `add_all` still emitted one `INSERT` per alert — measured, not
+  assumed. A scan never uses the alert rows it writes, so the ids are not needed and the
+  whole batch goes out as a single `executemany`. `isResolved` and `detectedAt` still come
+  from the model's column defaults.
+- **The dedup probe's `IN` list is chunked** at `ID_BATCH_SIZE = 500`. SQLite rejects a
+  statement with more than 32,766 bind parameters, and these endpoints put no upper bound
+  on how many instances they return ([PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07)),
+  so an unchunked list would have traded an N+1 for an outright failure on a large enough
+  deployment. Driving the scans with the batch size forced to 1, 2 and 3 produces the same
+  instances, alert counts and dedup outcome as the default.
+
+### Documentation
+
+- [../business-rules/ALERTING.md](../business-rules/ALERTING.md) — § 3 *Duplicate
+  prevention* describes the check as one query for the scan rather than a call per
+  instance, and states that the rule it enforces is unchanged.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-05 marked
+  **Fixed**, with what landed, the before/after statement counts for all three endpoints as
+  both roles, and the after-trace; the PERF-01, PERF-04 and PERF-06 cross-references that
+  called the dedup probe per-instance corrected; the measurement method now records how the
+  "before" column was produced and how the chunking was checked.
+- [../performance/README.md](../performance/README.md) — the fixed count and a PERF-05
+  bullet.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — stop 43 is
+  `_instances_with_unresolved_alert` and stop 44 `_record_alerts`, with the line numbers
+  the change moved.
 
 ---
 
