@@ -25,9 +25,16 @@ def list_alerts(
     unpaginated it loaded and serialised every alert the caller could see
     (docs/performance/PERFORMANCE_BUGS.md § PERF-07).
     """
-    query = db.query(Alert).join(Instance, Alert.instanceId == Instance.id)
+    query = db.query(Alert)
     if client_ids is not None:
-        query = query.filter(Instance.clientId.in_(client_ids or [-1]))
+        # The join exists only to reach `Instance.clientId` for this filter, so it is
+        # made here rather than unconditionally: an ADMIN has no scope to apply and was
+        # paying a per-row lookup into `instances` for a column nothing reads — twice
+        # per request since the count query was added
+        # (docs/performance/PERFORMANCE_BUGS.md § PERF-09).
+        query = query.join(Instance, Alert.instanceId == Instance.id).filter(
+            Instance.clientId.in_(client_ids or [-1])
+        )
     if alertType is not None:
         query = query.filter(Alert.alertType == alertType)
     if isResolved is not None:

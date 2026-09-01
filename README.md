@@ -5,7 +5,7 @@
 **A REST API that replaces the Excel spreadsheet 10 client companies were tracked in.**
 
 Instances, alerts, cost, SLA and an LLM-powered diagnosis endpoint — behind JWT auth,
-role scoping and 123 functional tests.
+role scoping and 124 functional tests.
 
 <br/>
 
@@ -17,7 +17,7 @@ role scoping and 123 functional tests.
 [![JWT](https://img.shields.io/badge/Auth-JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)](docs/api/AUTHENTICATION.md)
 [![SQLite](https://img.shields.io/badge/DB-SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](docs/design/ERD.md)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?style=flat-square&logo=anthropic&logoColor=white)](docs/design/LLM_FEATURE.md)
-[![Tests](https://img.shields.io/badge/tests-123%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
+[![Tests](https://img.shields.io/badge/tests-124%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
 [![Endpoints](https://img.shields.io/badge/endpoints-19%20%2B%20health-44CC11?style=flat-square&logo=swagger&logoColor=white)](docs/api/ENDPOINTS.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
@@ -46,7 +46,7 @@ role scoping and 123 functional tests.
 | 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
 | 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
 | 📚 | **Documented end to end** | Ten documentation folders: API reference, business rules, ERD, walkthrough, performance findings |
-| ✅ | **123 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
+| ✅ | **124 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
 
@@ -208,7 +208,7 @@ Captured from Swagger UI against a freshly seeded database — all 29 in
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q          # 123 functional tests — no API key, no running server
+pytest -q          # 124 functional tests — no API key, no running server
 ```
 
 The suite drives the API over HTTP against a per-test **in-memory** database seeded with
@@ -220,7 +220,7 @@ the same demo data, so its expected values are exact rather than approximate.
 | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) | What every suite asserts |
 
 ⚡ Latency, throughput and concurrency were measured separately — 15 findings, three rated
-critical, eight fixed so far:
+critical, nine fixed so far:
 [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md).
 
 ---

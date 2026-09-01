@@ -1,13 +1,13 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Eight — [PERF-01](#perf-01)
-through [PERF-08](#perf-08) — have since been fixed; the **Status** column below says
+findings, ranked by the load at which they start to hurt. Nine — [PERF-01](#perf-01)
+through [PERF-09](#perf-09) — have since been fixed; the **Status** column below says
 which are still open.
 
 Nothing here is a functional bug — every one of the tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
-returning them *at all* under concurrency. (The suite has grown from 104 cases to 123
+returning them *at all* under concurrency. (The suite has grown from 104 cases to 124
 across these fixes; each finding below quotes the count at the time it landed.)
 
 **Every number below was measured**, not estimated. The method is in
@@ -28,7 +28,7 @@ challenged.
 | [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | **Fixed** |
 | [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | **Fixed** |
 | [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | **Fixed** |
-| [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | Open |
+| [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | **Fixed** |
 | [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | Open |
 | [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | Open |
 | [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium | Open |
@@ -395,8 +395,8 @@ where there is no `clientId` filter to lead with:
 Indexing also does nothing about the *number* of queries. It made the dedup probe a seek
 rather than a scan, but left it one statement per instance — that is [PERF-05](#perf-05),
 fixed separately and since. The count query still sorted in order to count
-([PERF-08](#perf-08), fixed since), and `list_alerts` still joins `instances` when nothing
-needs the join ([PERF-09](#perf-09), still open).
+([PERF-08](#perf-08), fixed since), and `list_alerts` still joined `instances` when nothing
+needed the join ([PERF-09](#perf-09), fixed since too).
 
 ---
 
@@ -792,9 +792,10 @@ cost and SLA responses still cover every instance rather than a page.
 
 - **The breaking change is real.** Six endpoints that returned a JSON array now return an
   envelope. Any existing client iterating the response has to read `.items`.
-- **`GET /api/alerts` still joins `instances` when nothing needs the join**
-  ([PERF-09](#perf-09)) — and now the count query inherits that join too, so for an
-  `ADMIN` the join is paid twice per request instead of once.
+- **`GET /api/alerts` still joined `instances` when nothing needed the join**
+  ([PERF-09](#perf-09)) — and the count query inherited that join too, so for an `ADMIN`
+  the join was paid twice per request instead of once. Fixed since, which is exactly the
+  leverage that doubling gave it.
 - **`costByInstance` and `instanceDetails` remain unbounded.** They are the two remaining
   response arrays that grow with a client's instance count. Bounding them would mean
   changing what the numbers beside them mean, which is a product decision rather than a
@@ -885,8 +886,9 @@ scoping and every offered sort key.
 ### PERF-09
 
 **`list_alerts` joins `instances` even when the join is unused.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-8) at the end of this finding.
 
-[alert_service.py:18](../../app/services/alert_service.py#L18) joins unconditionally, but
+[alert_service.py:18](../../app/services/alert_service.py#L18) joined unconditionally, but
 the join exists only to reach `Instance.clientId` for the scope filter. For an `ADMIN`,
 `client_ids is None` and the filter is never applied — the join is pure cost. Measured
 plan: `SCAN alerts` + a per-row `SEARCH instances` + `USE TEMP B-TREE FOR ORDER BY`.
@@ -897,6 +899,106 @@ one line below it.
 Since [PERF-07](#perf-07) the endpoint also issues a count over the same query, so for an
 `ADMIN` the unnecessary join is now paid twice per request rather than once. That raises
 the value of this fix; it does not change its shape.
+
+#### The fix that landed
+
+Exactly the move proposed above
+([alert_service.py:28](../../app/services/alert_service.py#L28)):
+
+```python
+query = db.query(Alert)
+if client_ids is not None:
+    query = query.join(Instance, Alert.instanceId == Instance.id).filter(
+        Instance.clientId.in_(client_ids or [-1])
+    )
+```
+
+An `ADMIN` now queries `alerts` alone; a `CLIENT_MANAGER` gets exactly the query they got
+before. Everything else in the function — the four filters, the `detectedAt, id` ordering,
+the `paginate()` call — is untouched.
+
+**Why dropping an inner join is safe here**, which is the only part of this that needed
+checking rather than measuring. An inner join is not purely a cost: it also *filters*, to
+the rows whose `instanceId` matches a live instance. Removing it changes the answer if an
+alert can outlive its instance — and for an `ADMIN`, who now has no join at all, such a row
+would appear in the history where it used to be silently hidden. It cannot happen:
+`Alert.instanceId` is `nullable=False`, the only writer of alerts is the monitoring scan
+(which uses ids it has just read), and `Instance.alerts` is declared
+`cascade="all, delete-orphan"`
+([models.py:96](../../app/models/models.py#L96)), so `DELETE /api/instances/{id}` takes the
+instance's alerts with it. Measured rather than assumed: after the three scans, deleting
+instance 3 — `STOPPED`, and therefore deletable — takes its `LONG_STOPPED` alert with it,
+and `GET /api/alerts` goes from 9 to 8. That is what
+`test_deleting_an_instance_removes_its_alerts_from_the_history` in
+[tests/test_alerts.py](../../tests/test_alerts.py) pins, because losing the cascade would
+now be a *visible* bug rather than only a storage one.
+
+##### Measured — the plans
+
+The point of the finding. `EXPLAIN QUERY PLAN` on the two statements a request issues,
+both variants run in the same process against the same seed with the pre-fix
+unconditional join restored as a monkeypatch:
+
+```
+ADMIN, count      before   SCAN alerts USING COVERING INDEX ix_alerts_instanceId_alertType_isResolved
+                           SEARCH instances USING COVERING INDEX ix_instances_id (id=? AND rowid=?)
+                  after    SCAN alerts USING COVERING INDEX ix_alerts_id
+
+ADMIN, page       before   SCAN alerts USING INDEX ix_alerts_detectedAt
+                           SEARCH instances USING COVERING INDEX ix_instances_id (id=? AND rowid=?)
+                  after    SCAN alerts USING INDEX ix_alerts_detectedAt
+```
+
+One index lookup into `instances` per row scanned, twice per request, gone from both.
+`?isResolved=false` plans the same way. The `CLIENT_MANAGER` plans are unchanged in both
+statements, which is the intent — that role still needs the join.
+
+##### Measured — the latency
+
+The statement *count* does not change: 3 for an `ADMIN`, 4 for a `CLIENT_MANAGER`, before
+and after. What changes is what one of them does, so this is the one finding in this
+document whose payoff is a wall-clock figure rather than a count. Median of 60 `ADMIN`
+`GET /api/alerts` requests through `TestClient` on a warmed process, the demo seed grown
+with synthetic alerts:
+
+| Alerts in table | Before | After |
+|---|---|---|
+| 9 (the seed after three scans) | 4.0 ms | 4.0 ms |
+| 5,009 | 4.4 ms | 4.3 ms |
+| 20,009 | 5.7 ms | **4.5 ms** |
+
+Consistent across three runs. At seed scale the difference is inside the noise and this
+document should not claim otherwise; the join costs what the table costs, and `alerts` is
+the table that grows. At 20,000 rows it is about a millisecond, roughly a fifth of the
+request. Every one of those requests returned an identical `total` and identical ids under
+both variants.
+
+##### Verification
+
+All 124 functional tests pass — the 123 that existed, unchanged, plus the cascade test
+described above. The alert coverage in [tests/test_alerts.py](../../tests/test_alerts.py)
+is what makes the unchanged 123 meaningful here: it pins the scoped `total`, the four
+filters, the tie-broken ordering and the page partition for both roles, which is precisely
+the behaviour a wrongly-dropped join would break.
+
+##### One correction to the finding above
+
+Its quoted plan — `SCAN alerts` + a per-row `SEARCH instances` + `USE TEMP B-TREE FOR
+ORDER BY` — was measured before [PERF-04](#perf-04) and [PERF-07](#perf-07) landed, and
+the temp B-tree is no longer part of it. `ix_alerts_detectedAt` gave the `ADMIN` listing
+an ordered scan, and PERF-07's `id` tiebreaker kept it. Re-measured on the code as it
+stood immediately before this fix, the `ADMIN` plan was `SCAN alerts USING INDEX
+ix_alerts_detectedAt` + the per-row `SEARCH instances` — no sort step. The join was the
+whole of the remaining waste, which is what this fix removes; the sort had already been
+paid for elsewhere.
+
+##### What this does not fix
+
+The `CLIENT_MANAGER` path is untouched by design, and its plan still ends in
+`USE TEMP B-TREE FOR ORDER BY`: driving the lookup off `ix_alerts_instanceId_alertType_isResolved`
+delivers rows in index order, so the `detectedAt` sort has to be done. That is the same
+trade [PERF-04](#perf-04) records for the scoped instance list, and it is a consequence of
+scoping needing the join at all — [PERF-10](#perf-10) is where that shape is addressed.
 
 ---
 
@@ -1039,7 +1141,8 @@ Ordered by benefit per unit of risk, not by severity.
 | 5 | Timeout and retry cap on the Anthropic client, and the session released before the call | [PERF-03](#perf-03) | Low — **done** |
 | 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule — **done** |
 | 7 | Count without the sort | [PERF-08](#perf-08) | Low — **done**, with step 9 |
-| 8 | Conditional join; scope filter as a subquery; drop the lazy loads | [PERF-09](#perf-09), [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
+| 8a | Conditional join | [PERF-09](#perf-09) | Low — **done** |
+| 8b | Scope filter as a subquery; drop the lazy loads | [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
 | 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract — **done** |
 
 Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
@@ -1053,8 +1156,11 @@ before six more endpoints started calling it.
 
 The order above was written before any of this landed, and step 9 ran out of turn: it was
 taken last as planned, but its own prerequisite — one place for the `page`/`size`
-convention to live — made step 7 free, so the two closed together. What remains is
-step 8.
+convention to live — made step 7 free, so the two closed together. Step 8 then split:
+the conditional join is a self-contained move of two lines with no effect on any other
+finding, so it was taken on its own as **8a** and rated Low rather than Medium — the risk
+in the original step 8 lives entirely in the auth-path changes, which rewrite how scoping
+reaches the query. What remains is **8b**.
 
 ---
 
@@ -1062,7 +1168,10 @@ step 8.
 
 Every figure in this document came from instrumenting the app itself, against the
 in-memory database seeded with the same demo data the test suite uses
-([../demo/SEED_DATA.md](../demo/SEED_DATA.md)) — 3 members, 10 clients, 16 instances.
+([../demo/SEED_DATA.md](../demo/SEED_DATA.md)) — 3 members, 10 clients, 15 instances.
+(Earlier revisions of this document said 16. The seed has always built 15; the count is
+corrected here and the figures it appears beside are unaffected, since every one of them
+was read off a run rather than derived from it.)
 
 **Query counts** — a SQLAlchemy `before_cursor_execute` listener attached to the engine,
 logging every statement while driving endpoints through `TestClient` as both `ADMIN` and
@@ -1108,6 +1217,20 @@ baseline. The scale rows were produced by seeding the demo data and then bulk-in
 700, 1,500 or 3,000 additional RUNNING instances at 95% CPU against client 1, so that the
 same rows are matched by the warnings scan, carried by the alert history once scanned, and
 listed by that client's instances endpoint.
+
+The before/after plans and latencies under [PERF-09](#perf-09) come from that listener
+again, with the pre-fix `list_alerts` — the unconditional join, restored as a monkeypatch —
+swapped in for one half of each pair, so both columns are measured in the same process on
+the same seed. The latency rows are the median of 60 `TestClient` requests after 10
+warm-up ones, at three table sizes: the seed's 9 alerts, and that seed bulk-loaded with
+5,000 and 20,000 further alerts spread round-robin across the instances that exist. Every
+paired run asserts an identical `total` and an identical list of ids before reporting a
+time, which is also how the first attempt at this measurement caught itself: seeding
+synthetic alerts against a hard-coded `instanceId` range of 1–16 produced 312 rows
+pointing at a 16th instance that does not exist, and the two variants then disagreed by
+exactly those rows — the inner join hiding them, the fixed version listing them. That is
+the orphan case the finding has to rule out, manufactured by accident; ruling it out for
+real is the cascade check above.
 
 **Query plans** — `EXPLAIN QUERY PLAN` on the statements that listener captured, run
 against the seeded schema. The before/after pairs under [PERF-04](#perf-04) come from two
@@ -1156,7 +1279,10 @@ the result, and [PERF-07](#perf-07) made the response and the working set grow w
 all three are fixed, and the grown-database rows under PERF-07 are there precisely because
 the seed is too small to show the difference. What remains unbounded by measurement rather
 than by fix is deep `OFFSET` paging and the two per-instance arrays in the cost and SLA
-responses, both recorded under [PERF-07](#perf-07). The query plans are SQLite's; a
+responses, both recorded under [PERF-07](#perf-07). [PERF-09](#perf-09) is the exception
+to the "counts, not times" rule: it removes work from inside a statement without changing
+how many statements run, so a wall-clock figure is the only thing that can show it, and
+it is reported at a table size where that figure is larger than the noise. The query plans are SQLite's; a
 different backend would plan differently, and would choose its own indexes from the ones
 [PERF-04](#perf-04) declares. No HTTP load test was run: [PERF-02](#perf-02) was reproduced
 at the connection-pool level rather than through the API, and the 30-minute figure in

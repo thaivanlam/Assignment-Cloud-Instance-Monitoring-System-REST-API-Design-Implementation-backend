@@ -136,7 +136,13 @@ unique last key an alert could land on two pages or on none as a caller walks th
 
 Alerts are deleted along with their instance
 ([INSTANCE_LIFECYCLE.md](INSTANCE_LIFECYCLE.md)), so history does not survive instance
-deletion.
+deletion. That rule is load-bearing for the listing, not just tidy: an alert carries no
+`clientId`, so scoping a `CLIENT_MANAGER` means joining `instances` — and an `ADMIN`, who
+has no scope to apply, is served without that join
+([../performance/PERFORMANCE_BUGS.md § PERF-09](../performance/PERFORMANCE_BUGS.md#perf-09)).
+An alert that outlived its instance would therefore be hidden from one role and listed to
+the other. The cascade is what stops such a row existing, and
+[../../tests/test_alerts.py](../../tests/test_alerts.py) pins it.
 
 ---
 
