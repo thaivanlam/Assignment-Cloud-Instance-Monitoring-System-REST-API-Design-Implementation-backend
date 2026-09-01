@@ -5,5 +5,21 @@
       "WebFetch(domain:docs.pydantic.dev)",
       "WebFetch(domain:docs.sqlalchemy.org)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "python \"${CLAUDE_PROJECT_DIR:-.}/scripts/check_docs_sync.py\" --hook",
+            "statusMessage": "Checking the docs rule",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
   }
 }

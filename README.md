@@ -287,7 +287,7 @@ app/
 └── core/                # JWT security, auth dependencies, domain exceptions
 docs/                    # Documentation — see docs/README.md
 tests/                   # pytest functional tests
-scripts/                 # Swagger UI screenshot capture
+scripts/                 # Swagger UI screenshot capture, docs-sync check
 ```
 
 ---
@@ -301,6 +301,10 @@ source-to-document mapping is in
 
 Commit subjects carry a type prefix — `feat:` · `fix:` · `docs:` · `refactor:` · `test:`.
 See [docs/contributing/COMMITS.md](docs/contributing/COMMITS.md).
+
+`scripts/check_docs_sync.py` reminds you at commit time: it names the documents the
+mapping asks for that were not staged with the code. It warns rather than blocks —
+install it with `git config core.hooksPath scripts/hooks`.
 
 ---
 

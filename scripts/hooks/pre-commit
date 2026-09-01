@@ -1,0 +1,16 @@
+#!/bin/sh
+# Reminds you of the documents rule 3 of docs/contributing/DOCUMENTATION.md asks for.
+# Never blocks: it prints what was not staged and lets the commit through.
+#
+# Install once per clone:  git config core.hooksPath scripts/hooks
+
+root=$(git rev-parse --show-toplevel)
+
+for py in python python3 py; do
+    if command -v "$py" >/dev/null 2>&1; then
+        "$py" "$root/scripts/check_docs_sync.py"
+        break
+    fi
+done
+
+exit 0

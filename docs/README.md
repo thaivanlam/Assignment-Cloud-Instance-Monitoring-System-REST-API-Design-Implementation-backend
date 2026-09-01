@@ -107,6 +107,8 @@ own README linking to the files inside it.
 - **Swagger screenshots follow the API.** A change that alters a response re-captures
   the affected images in [screenshots/](screenshots/README.md), in the same commit.
 - **Commit subjects carry a type prefix** — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
+- **A commit-time check reminds you.** `scripts/check_docs_sync.py` names the documents
+  the mapping asks for that were not staged. It warns; it does not block.
 
 Full rules, including the source → document mapping:
 [contributing/DOCUMENTATION.md](contributing/DOCUMENTATION.md) and

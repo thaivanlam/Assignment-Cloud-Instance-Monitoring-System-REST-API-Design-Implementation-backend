@@ -55,7 +55,14 @@ The **source → document mapping** — which document to read and update for ea
 directory — is the table in
 [docs/contributing/DOCUMENTATION.md](docs/contributing/DOCUMENTATION.md#5-source--document-mapping).
 Read it before changing anything under `app/`. It is kept in one place so it cannot
-drift; do not copy it back into this file.
+drift; do not copy it back into this file — `scripts/check_docs_sync.py` holds the only
+second copy, as `MAPPING`, and a new row goes in both.
+
+That script is also the safety net for rule 3: a `PreToolUse` hook in
+[.claude/settings.json](.claude/settings.json) runs it before every `git commit`, and it
+names the documents the mapping asks for that were not staged. It warns and lets the
+commit through — treat the warning as the reminder it is, not as noise, and stage the
+document if the change was a behaviour change.
 
 A change that alters observable behaviour also belongs in
 [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md) if it invalidates a step or an
