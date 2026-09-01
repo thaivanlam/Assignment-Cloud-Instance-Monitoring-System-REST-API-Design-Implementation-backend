@@ -1,9 +1,9 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Three — [PERF-01](#perf-01),
-[PERF-02](#perf-02) and [PERF-03](#perf-03) — have since been fixed; the **Status**
-column below says which are still open.
+findings, ranked by the load at which they start to hurt. Four — [PERF-01](#perf-01),
+[PERF-02](#perf-02), [PERF-03](#perf-03) and [PERF-04](#perf-04) — have since been fixed;
+the **Status** column below says which are still open.
 
 Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
@@ -22,7 +22,7 @@ challenged.
 | [PERF-01](#perf-01) | Monitoring polls take an exclusive write lock on the whole database | `services/monitor_service.py` | Critical | **Fixed** |
 | [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical | **Fixed** |
 | [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | **Fixed** |
-| [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | Open |
+| [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | **Fixed** |
 | [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | Open |
 | [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | Open |
 | [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | Open |
@@ -271,11 +271,12 @@ records as future work. The client is also still constructed per request
 ### PERF-04
 
 **No index exists on any foreign key or filter column.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-3) at the end of this finding.
 
-`models/models.py` declares `index=True` on primary keys and on `members.email`. Nothing
+`models/models.py` declared `index=True` on primary keys and on `members.email`. Nothing
 else. SQLite does not index foreign keys automatically.
 
-`EXPLAIN QUERY PLAN`, measured on the seeded schema:
+`EXPLAIN QUERY PLAN`, measured on the seeded schema before the fix:
 
 | Query | Plan |
 |---|---|
@@ -300,6 +301,96 @@ alerts).
 The composite `alerts` index is the important one — it turns the dedup probe from a table
 scan into a single index seek.
 
+#### The fix that landed
+
+Five of the six indexes above were added; the sixth was measured and rejected.
+
+**What was declared** — [models.py](../../app/models/models.py), as `index=True` on the
+single columns and `__table_args__` on the two composites:
+
+| Table | Index | Serves |
+|---|---|---|
+| `clients` | `managerId` | The `accessible_client_ids` lookup on every `CLIENT_MANAGER` request |
+| `instances` | `(clientId, status)` | The scope filter on every list and monitoring query, with `?status=` beside it |
+| `instances` | `region` | `GET /api/instances?region=` |
+| `instances` | `updatedAt` | `?sort=-updatedAt` |
+| `alerts` | `(instanceId, alertType, isResolved)` | The dedup probe, once per instance per scan |
+| `alerts` | `detectedAt` | `ORDER BY detectedAt DESC`, the sort on every alert listing |
+
+The composite on `instances` leads with `clientId` deliberately: `clientId` is filtered on
+its own far more often than `status` is, so one index serves both shapes.
+
+**`alerts.isResolved` was not added.** It looks obvious — it is a filter parameter — but
+the column is a boolean whose rows are overwhelmingly `false`, and every query that filters
+on it also sorts by `detectedAt`. Given the index, SQLite takes it, matches nearly the whole
+table, and then still has to sort what it matched:
+
+```
+GET /api/alerts?isResolved=false, ADMIN
+
+with ix_alerts_detectedAt only   SCAN alerts USING INDEX ix_alerts_detectedAt
+                                 | SEARCH instances USING INTEGER PRIMARY KEY
+
+plus ix_alerts_isResolved        SEARCH alerts USING INDEX ix_alerts_isResolved (isResolved=?)
+                                 | SEARCH instances USING INTEGER PRIMARY KEY
+                                 | USE TEMP B-TREE FOR ORDER BY
+```
+
+It trades an ordered scan for an unordered seek plus a sort, on the table that grows
+fastest — and every index is also a write cost on every `INSERT`. It was left out.
+
+**The indexes reach an existing database.** `Base.metadata.create_all` skips a table that
+already exists, and its indexes with it, so declaring an index does nothing to a
+`monitoring.db` created before the declaration — and the project has no migration step
+([../design/ERD.md § Known Gaps](../design/ERD.md#known-gaps)). `lifespan`
+([main.py:25](../../app/main.py#L25)) therefore follows `create_all` with one
+`index.create(bind=engine, checkfirst=True)` per index in the metadata. It is idempotent,
+and against the existing seeded `monitoring.db` it created all five and left the rest
+untouched.
+
+Measured — the same statements, on the same seeded data, with and without the indexes:
+
+| Query | Plan before | Plan after |
+|---|---|---|
+| Instance list, scoped + `status` | `SCAN instances` | `SEARCH instances USING INDEX ix_instances_clientId_status (clientId=? AND status=?)` + `USE TEMP B-TREE FOR ORDER BY` |
+| Instance list by `region` | `SCAN instances` | `SEARCH instances USING INDEX ix_instances_region (region=?)` |
+| `accessible_client_ids` | `SCAN clients` | `SEARCH clients USING COVERING INDEX ix_clients_managerId (managerId=?)` |
+| Alert dedup probe | `SCAN alerts` | `SEARCH alerts USING INDEX ix_alerts_instanceId_alertType_isResolved (instanceId=? AND alertType=? AND isResolved=?)` |
+| `list_alerts`, `ADMIN` | `SCAN alerts` + `USE TEMP B-TREE FOR ORDER BY` | `SCAN alerts USING INDEX ix_alerts_detectedAt` — no sort step |
+| Instance list, `sort=-updatedAt` | `SCAN instances` + `USE TEMP B-TREE FOR ORDER BY` | `SCAN instances USING INDEX ix_instances_updatedAt` — no sort step |
+| Report status counts, scoped | `SCAN instances` + `USE TEMP B-TREE FOR GROUP BY` | `SEARCH instances USING COVERING INDEX ix_instances_clientId_status (clientId=?)` + the same `GROUP BY` sort |
+
+Every plan that scanned a filtered column now seeks it, and the two `ORDER BY` temp
+B-trees — the alert listing's `detectedAt` sort and `?sort=-updatedAt` — are gone.
+
+One row of that table trades in the other direction, and is worth being explicit about: the
+scoped instance list **gains** a `USE TEMP B-TREE FOR ORDER BY`. A table scan visits rows in
+rowid order, so the default `ORDER BY id` came free with the scan; drive the lookup off
+`ix_instances_clientId_status` instead and the matches arrive in index order and have to be
+sorted. That is the right trade for the shape this API has — sorting the rows one client
+owns is bounded by that client's instance count, while the scan it replaces is bounded by
+the whole table — but on a small table, or a filter that matches most of it, it is close to
+a wash.
+
+All 104 functional tests pass unchanged.
+
+What this does **not** fix. Two plans stayed `SCAN instances`, both on the `ADMIN` path
+where there is no `clientId` filter to lead with:
+
+- `check_warnings` — `cpuUsage >= 80 AND status = 'RUNNING'`. `cpuUsage` is not indexed,
+  and a `>=` on a float makes a poor index anyway; the composite cannot help because its
+  leading column is absent from the query.
+- `check_long_stopped` — `status = 'STOPPED' AND updatedAt <= ?`. SQLite prefers the scan
+  to a range seek plus a row lookup per hit. A `(status, updatedAt)` composite would change
+  that, and was not added: the same scan under a `CLIENT_MANAGER` already uses
+  `ix_instances_clientId_status`, and a third index on `instances` for the unscoped case
+  alone did not earn its write cost.
+
+Indexing also does nothing about the *number* of queries. The dedup probe is a seek rather
+than a scan now, but it is still one statement per instance ([PERF-05](#perf-05)); the
+count query still sorts in order to count ([PERF-08](#perf-08)); and `list_alerts` still
+joins `instances` when nothing needs the join ([PERF-09](#perf-09)).
+
 ---
 
 ### PERF-05
@@ -308,8 +399,9 @@ scan into a single index seek.
 
 `_record_alert` calls `_has_unresolved_alert`
 ([monitor_service.py:27](../../app/services/monitor_service.py#L27)) inside a per-instance
-loop, and each call is its own `SELECT … LIMIT 1` — a full `alerts` scan
-([PERF-04](#perf-04)).
+loop, and each call is its own `SELECT … LIMIT 1`. [PERF-04](#perf-04) has since turned
+each one into an index seek rather than a full `alerts` scan, but their *number* is
+unchanged: still one round trip per instance.
 
 Measured, `ADMIN GET /api/monitor/warnings` against the 16 seeded instances — **14
 queries** for a response of 4 rows:
@@ -460,7 +552,7 @@ Measured, `CLIENT_MANAGER GET /api/alerts` — **3 queries, 2 of them overhead**
 
 ```
 SELECT members …                      <- auth
-SELECT clients.id WHERE managerId = ? <- scope  (full scan, PERF-04)
+SELECT clients.id WHERE managerId = ? <- scope  (indexed since PERF-04)
 SELECT alerts …                       <- the request
 ```
 
@@ -581,7 +673,7 @@ Ordered by benefit per unit of risk, not by severity.
 
 | # | Change | Findings closed | Risk |
 |---|---|---|---|
-| 1 | Add the missing indexes | [PERF-04](#perf-04) | None — additive |
+| 1 | Add the missing indexes | [PERF-04](#perf-04) | None — additive — **done** |
 | 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low |
 | 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
 | 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low — **done** |
@@ -591,7 +683,7 @@ Ordered by benefit per unit of risk, not by severity.
 | 8 | Scope filter as a subquery; drop the lazy loads | [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
 | 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract |
 
-Steps 1–5 are configuration and require no change to any documented behaviour. Step 6
+Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
 touches a rule documented in [../business-rules/ALERTING.md](../business-rules/ALERTING.md)
 and must keep the dedup guarantee intact. Step 9 changes response shapes and needs
 [../api/CONVENTIONS.md](../api/CONVENTIONS.md) and
@@ -616,7 +708,12 @@ def record(conn, cursor, statement, params, context, executemany):
 ```
 
 **Query plans** — `EXPLAIN QUERY PLAN` on the statements that listener captured, run
-against the seeded schema.
+against the seeded schema. The before/after pairs under [PERF-04](#perf-04) come from two
+engines built in the same process on that same seed — one from the metadata as it stands,
+one with the six indexes discarded from the metadata before `create_all`, which is the
+schema as it was — so both columns are measured rather than one being remembered. Dropping
+the indexes from a live connection instead does *not* work: the plans come back unchanged,
+because SQLite is still answering from the schema it prepared against.
 
 **Pool exhaustion** — 40 threads against the real `monitoring.db`, each borrowing a
 connection from a `create_engine(...)` pool and holding it for 3 seconds while the others
@@ -653,8 +750,8 @@ is the before/after table under [PERF-03](#perf-03).
 Caveats worth stating: the counts come from the 16-instance seed, so absolute numbers are
 small — what matters is which of them **scale with the result set**
 ([PERF-05](#perf-05), [PERF-06](#perf-06), [PERF-07](#perf-07)). The query plans are
-SQLite's; a different backend would plan differently, though the missing indexes would
-still be missing. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
+SQLite's; a different backend would plan differently, and would choose its own indexes
+from the ones [PERF-04](#perf-04) declares. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
 connection-pool level rather than through the API, and the 30-minute figure in
 [PERF-03](#perf-03) is derived from the SDK's configured limits rather than from an
 observed timeout — its connection-hold counts, however, come from real requests

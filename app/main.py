@@ -24,6 +24,13 @@ from app.seed import seed
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # `create_all` skips a table that already exists — its indexes included — so a
+    # database file created before an index was declared would never get it, and the
+    # project has no migration step (docs/design/ERD.md § Known Gaps). Creating the
+    # indexes separately with `checkfirst` is idempotent and covers both cases.
+    for table in Base.metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(bind=engine, checkfirst=True)
     with SessionLocal() as db:
         seed(db)
     yield
