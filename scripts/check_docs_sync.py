@@ -55,6 +55,7 @@ MAPPING: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     ("app/database.py", ("docs/design/DATABASE.md", "docs/design/ARCHITECTURE.md")),
+    ("app/pagination.py", ("docs/api/CONVENTIONS.md",)),
     (
         "app/config.py",
         (

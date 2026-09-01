@@ -6,6 +6,7 @@ from app.config import UNIT_PRICES
 from app.core.exceptions import ActiveInstanceException, NotFoundException
 from app.models import Client, Instance, InstanceStatus
 from app.models.models import utcnow
+from app.pagination import DEFAULT_SIZE, paginate
 from app.schemas.schemas import InstanceCreate, InstanceStatusUpdate
 
 SORTABLE_FIELDS = {
@@ -39,7 +40,7 @@ def list_instances(
     db: Session,
     client_ids: list[int] | None,
     page: int = 1,
-    size: int = 10,
+    size: int = DEFAULT_SIZE,
     status: InstanceStatus | None = None,
     clientId: int | None = None,
     region: str | None = None,
@@ -68,11 +69,14 @@ def list_instances(
         field = "id"
     column = getattr(Instance, field)
     query = query.order_by(column.desc() if descending else column.asc())
+    # `id` last, to break ties on the sort key. Most sortable fields are not unique —
+    # `status`, `region`, `instanceType` least of all — and rows tied on the sort key
+    # have no defined order between them, so a row could otherwise appear on two pages
+    # or on none as the caller walks them.
+    if field != "id":
+        query = query.order_by(Instance.id.asc())
 
-    total = query.count()
-    items = query.offset((page - 1) * size).limit(size).all()
-    total_pages = (total + size - 1) // size if size else 0
-    return items, total, total_pages
+    return paginate(query, Instance.id, page, size)
 
 
 def get_instance(db: Session, instance_id: int) -> Instance:

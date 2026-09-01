@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import accessible_client_ids, assert_client_access, get_current_member
 from app.database import get_db
 from app.models import Alert, InstanceStatus, InstanceType, Member
+from app.pagination import DEFAULT_SIZE, PageParam, SizeParam
 from app.schemas.schemas import (
     DiagnosisResponse,
     InstanceCreate,
@@ -35,8 +36,8 @@ def create_instance(
     summary="Get all instances (pagination / filter / sort)",
 )
 def list_instances(
-    page: int = Query(1, ge=1),
-    size: int = Query(10, ge=1, le=100),
+    page: PageParam = 1,
+    size: SizeParam = DEFAULT_SIZE,
     status: InstanceStatus | None = Query(None, description="Filter by status"),
     clientId: int | None = Query(None, description="Filter by client"),
     region: str | None = Query(None, description="Filter by region"),
