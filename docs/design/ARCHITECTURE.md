@@ -148,6 +148,17 @@ skipped for an in-memory SQLite URL, which gets a `SingletonThreadPool` that has
 overflow to size. Background:
 [../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02).
 
+One handler ends its session early on purpose. `GET /api/instances/{id}/diagnosis`
+waits on a third-party API, and `get_db` would otherwise keep its connection checked
+out for that whole wait, so the controller calls `db.close()` once it has loaded
+everything the response needs and before it calls the provider — 20 concurrent
+diagnoses held 20 connections before, and hold none now. `Session.close()` resets the
+session rather than tearing it down, so `get_db` closing it again is a no-op, and the
+rows it loaded stay readable because closing detaches without expiring. Background:
+[../performance/PERFORMANCE_BUGS.md § PERF-03](../performance/PERFORMANCE_BUGS.md#perf-03);
+the rule that keeps it safe is in
+[LLM_FEATURE.md § 4.5](LLM_FEATURE.md#45-request-limits-and-the-database-connection).
+
 Which pool class each `DATABASE_URL` gets, and why the in-memory mode belongs to the tests
 alone: [DATABASE.md](DATABASE.md).
 

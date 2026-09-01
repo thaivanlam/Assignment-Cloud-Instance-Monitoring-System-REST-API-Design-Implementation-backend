@@ -188,6 +188,12 @@ Sends instance metadata plus its 10 most recent alerts to Claude and returns a
 three-section incident write-up. Without an `ANTHROPIC_API_KEY` — or on any provider
 failure — it falls back to a deterministic rule-based diagnosis and still returns `200`.
 
+The provider call is capped at 30 seconds with one retry, so the endpoint answers
+within about a minute in the worst case; a slower provider becomes a timeout, which
+is a provider failure like any other and yields `source: "rule-based"`. The handler
+returns its database connection to the pool before making the call, so a diagnosis in
+flight does not occupy one.
+
 **Response** `200` — `DiagnosisResponse`
 
 | Field | Type | Notes |

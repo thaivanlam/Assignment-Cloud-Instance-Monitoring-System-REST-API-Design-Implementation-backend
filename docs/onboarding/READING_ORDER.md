@@ -245,7 +245,7 @@ Six endpoints; four of them reduce to the same three steps — load, guard, dele
 | 39 | `get_instance` | [instance_controller.py:57](../../app/controllers/instance_controller.py#L57) | `assert_client_access(member, instance.client)` |
 | 40 | `update_status` | [instance_controller.py:72](../../app/controllers/instance_controller.py#L72) | same |
 | 41 | `delete_instance` | [instance_controller.py:88](../../app/controllers/instance_controller.py#L88) | same; returns `204` |
-| 42 | `diagnose_instance` | [instance_controller.py:103](../../app/controllers/instance_controller.py#L103) | same; loads the 10 most recent alerts, then calls Stage 8 |
+| 42 | `diagnose_instance` | [instance_controller.py:103](../../app/controllers/instance_controller.py#L103) | same; loads the 10 most recent alerts, then calls `db.close()` — the connection goes back to the pool before the provider call, not after it — and then Stage 8 |
 
 **The shape you have now learned** — and it holds for all 19 endpoints:
 
@@ -366,10 +366,10 @@ Read it **bottom-up**: `diagnose` is three lines and tells you what the other th
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 71 | `_build_context` | [llm_service.py:19](../../app/services/llm_service.py#L19) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
-| 72 | `_llm_diagnosis` | [llm_service.py:39](../../app/services/llm_service.py#L39) | The Anthropic SDK call, with `import anthropic` *inside* the function so the dependency stays optional. Two comments worth reading: the SDK never reads `.env`, so the key is handed over explicitly; and adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`. |
-| 73 | `_rule_based_diagnosis` | [llm_service.py:83](../../app/services/llm_service.py#L83) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
-| 74 | `diagnose` | [llm_service.py:113](../../app/services/llm_service.py#L113) | Try the LLM, fall back, return `(text, source)` — `source` is surfaced in the response so a caller can always tell which path ran. |
+| 71 | `_build_context` | [llm_service.py:27](../../app/services/llm_service.py#L27) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
+| 72 | `_llm_diagnosis` | [llm_service.py:47](../../app/services/llm_service.py#L47) | The Anthropic SDK call, with `import anthropic` *inside* the function so the dependency stays optional. Two comments worth reading: the SDK never reads `.env`, so the key is handed over explicitly; and adaptive thinking spends the same token budget, so `max_tokens` is generous. Both client branches carry `TIMEOUT_SECONDS` / `MAX_RETRIES` — without them the SDK waits up to 30 minutes. **Any** exception returns `None`, a timeout included. |
+| 73 | `_rule_based_diagnosis` | [llm_service.py:95](../../app/services/llm_service.py#L95) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
+| 74 | `diagnose` | [llm_service.py:125](../../app/services/llm_service.py#L125) | Try the LLM, fall back, return `(text, source)` — `source` is surfaced in the response so a caller can always tell which path ran. |
 
 **The design point:** this endpoint has no failure mode. No API key, no network, a bad
 response — all produce a useful answer with `source: "rule-based"`, which is why the demo

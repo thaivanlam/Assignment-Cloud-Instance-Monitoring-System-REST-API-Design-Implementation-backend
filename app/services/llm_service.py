@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 MODEL = "claude-opus-4-8"
 
+# The SDK's own defaults are a 600-second read timeout and 2 retries — up to ~30 minutes
+# of waiting for a single diagnosis, during which the request holds a threadpool worker.
+# An operator reading an incident card is not served by an answer that late: past 30
+# seconds the deterministic fallback is the better response, and one retry still absorbs
+# a transient connection error. See docs/performance/PERFORMANCE_BUGS.md § PERF-03.
+TIMEOUT_SECONDS = 30.0
+MAX_RETRIES = 1
+
 
 def _build_context(instance: Instance, alerts: list[Alert]) -> str:
     alert_lines = "\n".join(
@@ -45,7 +53,11 @@ def _llm_diagnosis(instance: Instance, alerts: list[Alert]) -> str | None:
         # With nothing configured, fall through to the SDK's own credential resolution
         # (env var, ANTHROPIC_AUTH_TOKEN, or an `ant auth login` profile).
         api_key = settings.ANTHROPIC_API_KEY.strip()
-        client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        limits = {"timeout": TIMEOUT_SECONDS, "max_retries": MAX_RETRIES}
+        client = (
+            anthropic.Anthropic(api_key=api_key, **limits) if api_key
+            else anthropic.Anthropic(**limits)
+        )
         response = client.messages.create(
             model=MODEL,
             # Adaptive thinking spends thinking tokens out of this same budget, so a
