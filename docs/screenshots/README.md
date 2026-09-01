@@ -7,6 +7,22 @@ order of [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md).
 Numbers in these captures reflect the seed state at capture time — see
 [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 
+## Keeping them current
+
+A capture is documentation: when a change alters a route, a field, a status code, an
+error body or the seed numbers, the affected PNG is re-captured in the same commit —
+rule 6 of
+[../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#6-screenshots-follow-the-api).
+
+```bash
+uvicorn app.main:app --reload                                  # terminal 1
+python scripts/capture_swagger_ui.py --only instance_create    # terminal 2
+```
+
+`--only` is a substring filter on the scenario name — the part of the filename after the
+number. Omit it to rebuild all 29, after deleting `monitoring.db` so the run starts from
+a clean seed. Adding or removing a scenario also means adding or removing its row below.
+
 ## Auth
 
 | Screenshot | Shows |

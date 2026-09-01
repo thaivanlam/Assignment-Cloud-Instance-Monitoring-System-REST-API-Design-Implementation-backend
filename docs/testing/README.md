@@ -31,6 +31,7 @@ documents from going stale.
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | The contract the tests assert |
 | [../api/ERRORS.md](../api/ERRORS.md) | The failure status codes and body shapes asserted on |
 | [../business-rules/](../business-rules/README.md) | The rules each test case pins down |
+| [../design/DATABASE.md](../design/DATABASE.md) | The in-memory engine the suite runs on, and how it differs from the application's |
 | [../demo/SEED_DATA.md](../demo/SEED_DATA.md) | The fixed data every expectation is built from |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | The manual equivalent of this suite |
 | [../contributing/COMMITS.md](../contributing/COMMITS.md) | The `test:` commit prefix |

@@ -1,8 +1,9 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. One — [PERF-01](#perf-01) — has
-since been fixed; the **Status** column below says which are still open.
+findings, ranked by the load at which they start to hurt. Two — [PERF-01](#perf-01) and
+[PERF-02](#perf-02) — have since been fixed; the **Status** column below says which are
+still open.
 
 Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
@@ -19,7 +20,7 @@ challenged.
 | ID | Finding | Where | Severity | Status |
 |---|---|---|---|---|
 | [PERF-01](#perf-01) | Monitoring polls take an exclusive write lock on the whole database | `services/monitor_service.py` | Critical | **Fixed** |
-| [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical | Open |
+| [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical | **Fixed** |
 | [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | Open |
 | [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | Open |
 | [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | Open |
@@ -122,13 +123,13 @@ What this does **not** fix: the scans still issue one dedup `SELECT` per instanc
 ### PERF-02
 
 **The connection pool is a third the size of the request concurrency.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-1) at the end of this finding.
 
 Every endpoint in `app/controllers/` is declared `def`, not `async def`. FastAPI therefore
 runs each one in `run_in_threadpool`, and AnyIO's default limiter allows **40** such
 workers concurrently.
 
-The engine is created with no pool arguments
-([database.py:9](../../app/database.py#L9)), so it gets `QueuePool` defaults — measured:
+The engine was created with no pool arguments, so it got `QueuePool` defaults — measured:
 
 ```
 pool: QueuePool  size 5      (+ max_overflow 10  =  15 connections)
@@ -137,21 +138,51 @@ pool: QueuePool  size 5      (+ max_overflow 10  =  15 connections)
 40 concurrent handlers, 15 connections. Request 16 onward blocks in `pool.connect()` for
 30 seconds and then raises `TimeoutError: QueuePool limit of size 5 overflow 10 reached`.
 
-**Why it matters.** The failure mode is not slowness, it is a 500. And it appears only
+**Why it mattered.** The failure mode is not slowness, it is a 500. And it appears only
 under concurrency, so no functional test will ever catch it.
 
-**Fix.** Size the pool against the actual concurrency and make the mismatch explicit:
+#### The fix that landed
+
+The pool is now sized from the concurrency it has to serve, with the two numbers written
+next to each other so the mismatch cannot come back
+([database.py:21](../../app/database.py#L21)):
 
 ```python
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args=connect_args,
-    pool_size=20, max_overflow=20, pool_pre_ping=True,
-)
+MAX_CONCURRENT_REQUESTS = 40          # AnyIO's default threadpool limit
+POOL_SIZE = MAX_CONCURRENT_REQUESTS // 2
+MAX_OVERFLOW = MAX_CONCURRENT_REQUESTS - POOL_SIZE
 ```
 
-Or cap the threadpool to match the pool. Either way the two numbers should be chosen
-together rather than inherited from two unrelated defaults.
+20 connections kept open and 20 more opened on demand: **40 threads, 40 connections**. The
+alternative — capping the threadpool at 15 to match the pool — was not taken; it would have
+made the pool the limit on request concurrency for every endpoint, including the ones that
+touch the database briefly or not at all.
+
+`pool_pre_ping=True` goes with it: after a quiet period the pool holds connections the
+server may have closed, and pre-ping replaces such a connection instead of failing the
+request that borrowed it.
+
+Two details worth knowing:
+
+- The pool arguments are skipped when `DATABASE_URL` names an **in-memory** SQLite
+  database. That URL gets a `SingletonThreadPool`, which has no `max_overflow`, and
+  passing one raises `TypeError` at import. File-backed SQLite — the default, and what
+  every deployment uses — gets `QueuePool` and is sized normally.
+- Nothing in the test suite is affected: `tests/conftest.py` builds its own `StaticPool`
+  engine and overrides `get_db`. All 104 tests pass unchanged.
+
+Measured, 40 threads each borrowing a connection and holding it for 3 seconds, with
+`pool_timeout` lowered to 2 seconds so the run finishes quickly:
+
+| Pool | Served | Failed |
+|---|---|---|
+| Defaults (5 + 10 = 15) | 15 / 40 | 25 × `TimeoutError` |
+| Sized (20 + 20 = 40) | 40 / 40 | 0 |
+
+What this does **not** fix: a handler that holds its connection for minutes rather than
+milliseconds still exhausts the pool — 40 slow LLM diagnoses now do what 15 used to
+([PERF-03](#perf-03)). Sizing the pool buys headroom; it does not bound how long a request
+may keep a connection.
 
 ---
 
@@ -507,7 +538,7 @@ Ordered by benefit per unit of risk, not by severity.
 | 1 | Add the missing indexes | [PERF-04](#perf-04) | None — additive |
 | 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low |
 | 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
-| 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low |
+| 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low — **done** |
 | 5 | Timeout and retry cap on the Anthropic client | [PERF-03](#perf-03) | Low |
 | 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule |
 | 7 | Count without the sort; conditional join | [PERF-08](#perf-08), [PERF-09](#perf-09) | Low |
@@ -541,11 +572,19 @@ def record(conn, cursor, statement, params, context, executemany):
 **Query plans** — `EXPLAIN QUERY PLAN` on the statements that listener captured, run
 against the seeded schema.
 
+**Pool exhaustion** — 40 threads against the real `monitoring.db`, each borrowing a
+connection from a `create_engine(...)` pool and holding it for 3 seconds while the others
+queue, `pool_timeout` lowered from 30 s to 2 s so a run takes seconds rather than minutes.
+Counting successes and `TimeoutError`s under the default pool and the sized one is the
+before/after table under [PERF-02](#perf-02).
+
 **Engine and SQLite settings** — read from the real `monitoring.db` engine:
 `type(engine.pool).__name__`, `engine.pool.size()`, and `PRAGMA journal_mode` /
 `synchronous` / `busy_timeout`. The journal and sync figures quoted under
 [PERF-01](#perf-01) are the pre-fix ones; the same three pragmas now read `wal` / `1` /
-`5000`.
+`5000`. The threadpool figure under [PERF-02](#perf-02) is
+`anyio.to_thread.current_default_thread_limiter().total_tokens`, and its pool sizes came
+from `engine.pool.size()` and `engine.pool._max_overflow` — 5 / 10 before, 20 / 20 now.
 
 **Commit counts** — a `commit` event listener on the engine
 (`@event.listens_for(engine, "commit")`), counting commits while driving one scan followed
@@ -559,9 +598,9 @@ Caveats worth stating: the counts come from the 16-instance seed, so absolute nu
 small — what matters is which of them **scale with the result set**
 ([PERF-05](#perf-05), [PERF-06](#perf-06), [PERF-07](#perf-07)). The query plans are
 SQLite's; a different backend would plan differently, though the missing indexes would
-still be missing. No load test was run — the concurrency findings
-([PERF-02](#perf-02), [PERF-03](#perf-03)) are derived from configured limits, not from
-observed failures.
+still be missing. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
+connection-pool level rather than through the API, and [PERF-03](#perf-03) is still derived
+from configured limits rather than from an observed failure.
 
 ---
 

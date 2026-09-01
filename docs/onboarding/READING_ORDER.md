@@ -104,9 +104,9 @@ these three objects. Once you know them, no later function contains a magic numb
 
 | # | Symbol | Line | What to take away |
 |---:|---|---|---|
-| 8 | `engine`, `SessionLocal`, `Base` | [database.py:9](../../app/database.py#L9) | `check_same_thread=False` is applied only for SQLite; `Base` is the SQLAlchemy 2.0 `DeclarativeBase` every model inherits. |
-| 9 | `_set_sqlite_pragmas` | [database.py:16](../../app/database.py#L16) | Registered on the engine's `connect` event, and only for SQLite: puts each connection in WAL mode with `synchronous=NORMAL` so a writer never blocks readers. Why it exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
-| 10 | `get_db` | [database.py:36](../../app/database.py#L36) | A generator dependency: yields a session, closes it in `finally`. |
+| 8 | `engine`, `SessionLocal`, `Base` | [database.py:37](../../app/database.py#L37) | `check_same_thread=False` is applied only for SQLite; the pool is sized to 40 connections — one per FastAPI threadpool worker, [../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02); `Base` is the SQLAlchemy 2.0 `DeclarativeBase` every model inherits. |
+| 9 | `_set_sqlite_pragmas` | [database.py:44](../../app/database.py#L44) | Registered on the engine's `connect` event, and only for SQLite: puts each connection in WAL mode with `synchronous=NORMAL` so a writer never blocks readers. Why it exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
+| 10 | `get_db` | [database.py:64](../../app/database.py#L64) | A generator dependency: yields a session, closes it in `finally`. |
 
 **The idea worth carrying forward:** `get_db` is the seam the tests use. In
 [tests/conftest.py:52](../../tests/conftest.py#L52) it is replaced by a session bound to an

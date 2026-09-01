@@ -5,7 +5,7 @@ Conventions every change in this repository follows.
 | Document | Contents |
 |---|---|
 | [COMMITS.md](COMMITS.md) | Commit message prefixes, subject and body style, commit scope |
-| [DOCUMENTATION.md](DOCUMENTATION.md) | English-only rule, read-before-you-write, code-and-docs-together, source → document mapping |
+| [DOCUMENTATION.md](DOCUMENTATION.md) | English-only rule, read-before-you-write, code-and-docs-together, screenshots-follow-the-API, source → document mapping |
 
 ## The short version
 
@@ -23,6 +23,9 @@ Documentation is written in **English**, the document covering an area is **read
 that area is changed, and it is **updated in the same commit** as the code. A behaviour
 change plus its document is therefore one `feat:` or `fix:` commit, not a code commit
 followed by a `docs:` commit.
+
+The Swagger captures in [../screenshots/](../screenshots/README.md) count as documents:
+a change that alters a response re-takes the affected images in that same commit.
 
 ## Related
 

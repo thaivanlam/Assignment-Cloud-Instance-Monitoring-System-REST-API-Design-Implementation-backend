@@ -13,7 +13,7 @@ Anthropic SDK
 app/
 ├── main.py                  FastAPI app, router registration, exception handlers, startup seed
 ├── config.py                Settings, unit pricing, SLA thresholds
-├── database.py              SQLAlchemy engine, SQLite pragmas, SessionLocal, get_db dependency
+├── database.py              SQLAlchemy engine, pool sizing, SQLite pragmas, SessionLocal, get_db
 ├── seed.py                  Idempotent demo data
 ├── models/                  M — SQLAlchemy ORM entities
 ├── schemas/                 V — Pydantic request/response DTOs
@@ -128,6 +128,29 @@ from the last committed snapshot while a writer runs. WAL keeps two sidecar file
 The hook is skipped entirely for a non-SQLite `DATABASE_URL`. Background:
 [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01).
 
+### Connection pool
+
+Every controller is declared `def`, so FastAPI runs it in AnyIO's worker threadpool, which
+allows 40 workers at once — and `get_db` holds one connection for the whole request. The
+engine is sized to match ([app/database.py](../../app/database.py)):
+
+```python
+MAX_CONCURRENT_REQUESTS = 40          # AnyIO's default threadpool limit
+POOL_SIZE = 20                        # kept open
+MAX_OVERFLOW = 20                     # opened on demand
+```
+
+20 + 20 = 40 connections, so 40 concurrent handlers each find one. On SQLAlchemy's
+defaults (5 + 10 = 15) the surplus requests queued in `pool.connect()` and failed with a
+500 once the 30-second pool timeout expired. `pool_pre_ping=True` replaces a connection the
+other end has closed rather than failing the request that borrowed it. The sizing is
+skipped for an in-memory SQLite URL, which gets a `SingletonThreadPool` that has no
+overflow to size. Background:
+[../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02).
+
+Which pool class each `DATABASE_URL` gets, and why the in-memory mode belongs to the tests
+alone: [DATABASE.md](DATABASE.md).
+
 ---
 
 ## 6. Configuration
@@ -160,6 +183,7 @@ restart, and the derived dicts will not pick up a runtime mutation of `settings`
 | Document | Why |
 |---|---|
 | [ERD.md](ERD.md) | The tables the models define |
+| [DATABASE.md](DATABASE.md) | Engine and pool selection, and the in-memory SQLite mode |
 | [LLM_FEATURE.md](LLM_FEATURE.md) | The one service with an external dependency |
 | [../business-rules/](../business-rules/README.md) | What lives in the service layer |
 | [../api/](../api/README.md) | What the controllers expose |

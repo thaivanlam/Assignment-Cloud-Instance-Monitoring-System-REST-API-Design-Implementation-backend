@@ -16,6 +16,9 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--screenshots-follow-the-api) | Screenshots follow the API | Swagger captures are re-taken in the commit that invalidates them |
+| [2026-09-01](#2026-09-01--database-engine-document) | Database engine document | Which pool each `DATABASE_URL` gets, and where in-memory SQLite is used |
+| [2026-08-31](#2026-08-31--perf-02-fixed-the-connection-pool-matches-the-request-concurrency) | PERF-02 fixed | The pool serves 40 concurrent requests instead of 15 |
 | [2026-08-31](#2026-08-31--perf-01-fixed-monitoring-polls-no-longer-lock-the-database) | PERF-01 fixed | Scans commit only when they record; SQLite runs in WAL |
 | [2026-08-31](#2026-08-31--onboarding-path-and-change-history) | Onboarding path and change history | A reading order through `app/`, and this changelog |
 | [2026-08-31](#2026-08-31--readme-as-a-landing-page) | README as a landing page | Badge header, architecture diagram, screenshot gallery |
@@ -29,6 +32,106 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Screenshots follow the API
+
+One commit adding a documentation rule. No source changed.
+
+### Documentation
+
+- **Added rule 6, *Screenshots follow the API*, to
+  [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#6-screenshots-follow-the-api)**
+  — the 29 captures in [../screenshots/](../screenshots/README.md) are live Swagger UI
+  responses, so a change to a route, a field, a status code, an error body or the seed
+  numbers makes one wrong. The affected PNG is now re-captured in the *same commit* as
+  the change, the same requirement rule 3 places on documents. The rule names the command
+  (`python scripts/capture_swagger_ui.py --only <scenario>` against a running server),
+  the `monitoring.db` side effects that make a full run drift from
+  [../demo/SEED_DATA.md](../demo/SEED_DATA.md), and what to update when a scenario is
+  added or removed. *Writing style* and *Related* renumbered to 7 and 8; the § 5 mapping
+  anchor cited elsewhere in this file is unchanged.
+- **Extended the source → document mapping** with a row for anything visible in a Swagger
+  response, pointing at [../screenshots/](../screenshots/README.md).
+- **Condensed the rule into [../../CLAUDE.md](../../CLAUDE.md)** as rule 5, so an agent
+  gets it without opening the contributing guide.
+- **Added a *Keeping them current* section to
+  [../screenshots/README.md](../screenshots/README.md)** with the capture command, so the
+  rule is discoverable from the folder it governs.
+- **Listed the rule in the two conventions summaries** — [../README.md](../README.md)
+  § *Conventions for these documents* and
+  [../contributing/README.md](../contributing/README.md) § *The short version* — which
+  would otherwise describe an incomplete rule set.
+
+---
+
+## 2026-09-01 — Database engine document
+
+One commit adding documentation only. No source changed.
+
+### Documentation
+
+- **Added [../design/DATABASE.md](../design/DATABASE.md)** — where `DATABASE_URL` comes
+  from, which pool class SQLAlchemy picks per URL (`QueuePool` for a file,
+  `SingletonThreadPool` for in-memory), and why passing `pool_size`/`max_overflow` to the
+  latter is a `TypeError` at import — the reason `IS_MEMORY_SQLITE` exists in
+  [../../app/database.py](../../app/database.py). It answers *where in-memory SQLite is
+  actually used*: only the `api` fixture in [../../tests/conftest.py](../../tests/conftest.py),
+  which overrides the pool with `StaticPool` so the test thread and FastAPI's worker
+  thread share one database instead of getting one empty database each. It also records
+  what that mode gives up — no pool sizing, no WAL (`PRAGMA journal_mode=WAL` returns
+  `memory`), no persistence, no sharing across processes — and that running the
+  application itself on `sqlite:///:memory:` imports cleanly and then fails the first
+  request with `no such table: members`, because the schema is created on the main thread
+  and every handler runs in a worker thread with its own connection.
+- **Linked from** [../design/README.md](../design/README.md),
+  [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) § 5,
+  [../testing/README.md](../testing/README.md),
+  [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) § 2,
+  [../README.md](../README.md) and the root [README.md](../../README.md).
+- **Extended the source → document mapping** in
+  [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#5-source--document-mapping)
+  with a row for `app/database.py`, which had none.
+
+---
+
+## 2026-08-31 — PERF-02 fixed: the connection pool matches the request concurrency
+
+The second performance finding closed. Configuration only — no API contract changed, no
+endpoint was added, and all 104 tests pass unchanged.
+
+### Fixed
+
+- **The database connection pool is sized to the request concurrency.** Every controller
+  is synchronous, so FastAPI runs it in AnyIO's threadpool, which allows 40 workers at
+  once, while `get_db` holds a connection for the whole request. The engine took
+  SQLAlchemy's `QueuePool` defaults — 5 connections plus 10 overflow — so from the 16th
+  concurrent request onward the surplus waited 30 seconds in `pool.connect()` and then
+  failed with a 500. `app/database.py` now derives the pool from that same limit:
+  `MAX_CONCURRENT_REQUESTS = 40`, split into `pool_size=20` and `max_overflow=20`, plus
+  `pool_pre_ping=True` so a connection closed at the other end is replaced rather than
+  handed out ([../../app/database.py](../../app/database.py)). Measured with 40 threads
+  each holding a connection for 3 seconds: 15 of 40 served before, 40 of 40 after.
+  The sizing is skipped for an in-memory SQLite URL, whose `SingletonThreadPool` has no
+  overflow to configure.
+
+Deliberately not done: capping the threadpool at 15 to match the old pool, the other half
+of the choice offered in
+[../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02).
+It would have made the connection pool the ceiling on concurrency for every endpoint,
+including those that barely touch the database. The finding's remaining edge — a handler
+that holds a connection for minutes, such as the LLM diagnosis — is
+[PERF-03](../performance/PERFORMANCE_BUGS.md#perf-03) and is still open.
+
+### Documentation
+
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-02 marked
+  **Fixed**, with what landed, what it does not fix, and the measurement behind the
+  before/after table; the pool-exhaustion method added to § How these were measured.
+- [../performance/README.md](../performance/README.md),
+  [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) (new *Connection pool* section) and
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) updated to match.
 
 ---
 

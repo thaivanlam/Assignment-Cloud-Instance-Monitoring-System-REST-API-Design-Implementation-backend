@@ -19,9 +19,11 @@ critical:
   actually recorded an alert, and SQLite runs in WAL mode with `synchronous=NORMAL`. The
   endpoints still record alerts on scan, by design
   ([../business-rules/ALERTING.md](../business-rules/ALERTING.md)).
-- **PERF-02** — FastAPI runs the (synchronous) endpoints on 40 threadpool workers against
-  a connection pool of 15. Past 15 concurrent requests the surplus ones time out with a
-  500.
+- **PERF-02** — *fixed.* FastAPI runs the (synchronous) endpoints on 40 threadpool
+  workers, and each holds a connection for the length of its request, but the pool was left
+  on SQLAlchemy's default 15 — so past 15 concurrent requests the surplus ones timed out
+  with a 500. The pool is now sized from that same number: 20 kept open plus 20 overflow,
+  40 threads to 40 connections.
 - **PERF-03** — the LLM diagnosis call sets no timeout, so the SDK defaults apply: a
   600-second read timeout across 3 attempts, holding a worker and a connection the entire
   time.
@@ -31,8 +33,8 @@ notes recorded deliberately rather than as defects — the login KDF cost (**PER
 correct as written and should not be changed.
 
 Every figure is measured against the seeded demo database, not estimated; the method is at
-the end of the document so any number can be reproduced. One finding, PERF-01, has been
-fixed; the rest are recorded and still open.
+the end of the document so any number can be reproduced. Two findings, PERF-01 and
+PERF-02, have been fixed; the rest are recorded and still open.
 
 ## Related
 

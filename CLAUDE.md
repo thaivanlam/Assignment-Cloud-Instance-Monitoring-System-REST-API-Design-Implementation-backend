@@ -42,6 +42,14 @@ These apply to every change in this repository, for every contributor.
    related documents elsewhere. When adding a document, add its link to that README, to
    [docs/README.md](docs/README.md), and to the direct-links table in
    [README.md](README.md).
+5. **Swagger screenshots follow the API.** The captures in
+   [docs/screenshots/](docs/screenshots/README.md) are live Swagger UI responses. If a
+   change alters a route, a field, a status code, an error body or the seed numbers,
+   re-capture the affected PNGs in the *same commit*:
+   `python scripts/capture_swagger_ui.py --only <scenario>` against a running server
+   (`--only` is a substring filter; omit it to rebuild all 29 from a deleted
+   `monitoring.db`). Adding or removing a capture also updates
+   [docs/screenshots/README.md](docs/screenshots/README.md).
 
 The **source → document mapping** — which document to read and update for each source
 directory — is the table in

@@ -66,12 +66,14 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 | `app/services/client_service.py` — SLA | [../business-rules/SLA.md](../business-rules/SLA.md) |
 | `app/services/llm_service.py` | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) |
 | `app/core/**` — auth, deps, exceptions | [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md), [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md), [../api/ERRORS.md](../api/ERRORS.md) |
+| `app/database.py` — engine, pool, SQLite pragmas, `get_db` | [../design/DATABASE.md](../design/DATABASE.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 | `app/config.py` — thresholds, pricing | [../business-rules/README.md](../business-rules/README.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 | `app/seed.py` — demo data | [../demo/SEED_DATA.md](../demo/SEED_DATA.md), [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) |
 | `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md) |
 | `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) |
 | Project layout or new module | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 | A function under `app/**` is added, removed, renamed or moved | [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — it walks the functions in order and cites their line numbers |
+| Anything visible in a Swagger response — a route, a field, a status code, an error body, seed numbers | [../screenshots/](../screenshots/README.md) — re-capture the affected PNGs ([how](#6-screenshots-follow-the-api)) |
 | Anything a reader would notice — an endpoint, a status code, a rule, a document | [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) — one entry per change, in the same commit ([how to word it](../changelog/CHANGELOG.md#adding-an-entry)) |
 
 A change that alters observable behaviour also belongs in
@@ -80,7 +82,36 @@ number there.
 
 ---
 
-## 6. Writing style
+## 6. Screenshots follow the API
+
+The PNGs in [../screenshots/](../screenshots/README.md) are Swagger UI responses captured
+against a running server, so they carry the same guarantees a document does — and go
+stale the same way. A change to a route, a request body, a response field, a status code,
+an error shape or the seed numbers makes the affected capture wrong. **Re-capture it in
+the same commit as the change**, for the same reason rule 3 exists: a screenshot showing
+a response the API no longer returns is worse than no screenshot.
+
+Re-capture only what the change touched — `--only` is a substring filter on the scenario
+name, which is the part of the filename after the number:
+
+```bash
+uvicorn app.main:app --reload                                  # terminal 1
+python scripts/capture_swagger_ui.py --only instance_create    # terminal 2
+```
+
+Omit `--only` to rebuild all 29. A run has side effects on `monitoring.db` — it adds a
+client and resolves an alert — so delete the file and restart the server first, otherwise
+the captured numbers drift from [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
+
+If the change adds or removes a scenario, edit
+[../../scripts/capture_swagger_ui.py](../../scripts/capture_swagger_ui.py) and update the
+tables in [../screenshots/README.md](../screenshots/README.md); if it touches one of the
+four images in the root [README.md](../../README.md) gallery, check that gallery still
+shows what its caption claims.
+
+---
+
+## 7. Writing style
 
 - **State the rule, then why it exists.** The reasoning is the part that cannot be
   recovered from the code.
@@ -95,12 +126,13 @@ number there.
 
 ---
 
-## 7. Related
+## 8. Related
 
 | Document | Why |
 |---|---|
 | [COMMITS.md](COMMITS.md) | Commit prefixes and message structure |
 | [README.md](README.md) | Contributing index |
+| [../screenshots/README.md](../screenshots/README.md) | The captures rule 6 keeps current, and what each one shows |
 | [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) | Where the change itself gets recorded |
 | [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the suite before you commit |
 | [../README.md](../README.md) | Documentation index |

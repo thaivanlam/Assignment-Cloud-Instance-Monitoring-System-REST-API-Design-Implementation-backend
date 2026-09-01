@@ -9,7 +9,7 @@ own README linking to the files inside it.
 | [api/](api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
 | [business-rules/](business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
 | [demo/](demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
-| [design/](design/README.md) | Architecture, ERD, LLM feature design |
+| [design/](design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | [testing/](testing/README.md) | Functional test suite and how to run it |
 | [performance/](performance/README.md) | Measured latency, throughput and concurrency findings |
 | [team/](team/README.md) | Per-member assignment scope |
@@ -28,6 +28,7 @@ own README linking to the files inside it.
 | Call an endpoint from client code | [api/AUTHENTICATION.md](api/AUTHENTICATION.md) → [api/ENDPOINTS.md](api/ENDPOINTS.md) |
 | Understand *why* a response looks that way | [business-rules/README.md](business-rules/README.md) |
 | Change or extend the code | [design/ARCHITECTURE.md](design/ARCHITECTURE.md) → [design/ERD.md](design/ERD.md) |
+| Know which database a run opens | [design/DATABASE.md](design/DATABASE.md) |
 | Work on the AI diagnosis feature | [design/LLM_FEATURE.md](design/LLM_FEATURE.md) |
 | Run the tests, or add one | [testing/RUNNING_TESTS.md](testing/RUNNING_TESTS.md) → [testing/FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) |
 | Know what is slow, and why | [performance/PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) |
@@ -68,6 +69,7 @@ own README linking to the files inside it.
 
 - [ARCHITECTURE.md](design/ARCHITECTURE.md) — MVC layering, request flow, configuration
 - [ERD.md](design/ERD.md) — entity relationship diagram and schema notes
+- [DATABASE.md](design/DATABASE.md) — engine and pool per `DATABASE_URL`, where in-memory SQLite is used
 - [LLM_FEATURE.md](design/LLM_FEATURE.md) — diagnosis endpoint design
 
 **[testing/](testing/README.md)**
@@ -102,6 +104,8 @@ own README linking to the files inside it.
 - **Read before you write.** Consult the document covering the area you are about to
   change before changing it.
 - **Every folder has a README** linking to its files and to related documents elsewhere.
+- **Swagger screenshots follow the API.** A change that alters a response re-captures
+  the affected images in [screenshots/](screenshots/README.md), in the same commit.
 - **Commit subjects carry a type prefix** — `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
 
 Full rules, including the source → document mapping:
