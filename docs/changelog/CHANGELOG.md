@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--perf-04-fixed-the-filtered-and-sorted-columns-are-indexed) | PERF-04 fixed | Every list endpoint seeks its rows instead of scanning the table |
 | [2026-09-01](#2026-09-01--perf-03-fixed-the-llm-call-is-bounded-and-holds-no-connection) | PERF-03 fixed | A diagnosis waits at most 60 s, and holds no database connection while it waits |
 | [2026-09-01](#2026-09-01--docs-sync-check) | Docs-sync check | The documentation rule is reminded at commit time, not only written down |
 | [2026-09-01](#2026-09-01--screenshots-follow-the-api) | Screenshots follow the API | Swagger captures are re-taken in the commit that invalidates them |
@@ -34,6 +35,63 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — PERF-04 fixed: the filtered and sorted columns are indexed
+
+The first of the high-severity performance findings closed. No API contract changed — same
+routes, same schemas, same status codes — and all 104 tests pass unchanged.
+
+### Fixed
+
+- **The columns the API filters and sorts on are now indexed.** `index=True` appeared only
+  on primary keys and `members.email`, and SQLite creates no index for a foreign key on its
+  own, so every list endpoint was a full table scan: `SCAN instances` for the main list,
+  `SCAN clients` for the accessible-client lookup every `CLIENT_MANAGER` request makes, and
+  `SCAN alerts` for the dedup probe each monitoring scan runs *once per instance*.
+  [../../app/models/models.py](../../app/models/models.py) declares five indexes —
+  `clients.managerId`, `instances.(clientId, status)`, `instances.region`,
+  `instances.updatedAt`, and the composite `alerts.(instanceId, alertType, isResolved)`
+  with `alerts.detectedAt` beside it. Measured on the same seeded data, every one of those
+  scans became a `SEARCH … USING INDEX`, and the two `USE TEMP B-TREE FOR ORDER BY` steps —
+  the alert listing's `detectedAt` sort and `?sort=-updatedAt` — disappeared.
+  A sixth index, on `alerts.isResolved`, was proposed by the finding and **not** added:
+  measured, it makes `GET /api/alerts?isResolved=false` slower, because nearly every row is
+  `false`, so SQLite takes the index, matches almost the whole table, and then has to sort
+  what it matched instead of reading it in order off `ix_alerts_detectedAt`.
+- **Startup creates any index the database file is missing.** `Base.metadata.create_all`
+  skips a table that already exists and its indexes with it, so a declared index would never
+  reach a `monitoring.db` created before the declaration — and the project has no migration
+  step. `lifespan` ([../../app/main.py](../../app/main.py)) now follows `create_all` with one
+  `index.create(bind=engine, checkfirst=True)` per index in the metadata. It is idempotent,
+  issues no `CREATE` on a file that already has them all, and means this change needs no
+  database rebuild. Indexes are the one schema change that reaches an existing file this
+  way; a column change still means deleting `monitoring.db`.
+
+Still open on the same code paths: the dedup probe is a seek now but there is still one of
+them per instance ([../performance/PERFORMANCE_BUGS.md#perf-05](../performance/PERFORMANCE_BUGS.md#perf-05)),
+the pagination count still sorts in order to count
+([PERF-08](../performance/PERFORMANCE_BUGS.md#perf-08)), and two `ADMIN`-path scans stay
+scans — `check_warnings` filters on the unindexed `cpuUsage`, and `check_long_stopped`'s
+range on `updatedAt` is one SQLite still prefers to scan.
+
+### Documentation
+
+- [../design/ERD.md](../design/ERD.md) — new § *Indexes*: what is indexed, what each index
+  serves, and why `alerts.isResolved` and `cost_snapshots.clientId` are deliberately left
+  out. The *No migrations* known gap now records the index exception.
+- [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — § 5 *Startup* is a three-step
+  list; step 2 is the index pass and why `create_all` alone is not enough.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-04 marked
+  **Fixed**, with what landed, the before/after plan table, the rejected sixth index and
+  what the indexes do not fix; the PERF-05 and PERF-10 cross-references that called these
+  queries full scans corrected; the measurement method now records how both columns of the
+  plan table were produced — including that dropping indexes from a live connection leaves
+  the plans unchanged, so the "before" column needs its own engine.
+- [../performance/README.md](../performance/README.md),
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — the fixed count, and
+  the `main.py` and `models.py` line numbers the change moved.
 
 ---
 
