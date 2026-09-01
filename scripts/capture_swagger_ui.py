@@ -94,8 +94,10 @@ def _demo_instance_id(ctx: "Runner") -> int | None:
 
 
 def _unresolved_alert_id(ctx: "Runner") -> int | None:
-    alerts = ctx.api_get("/api/alerts", token=ctx.token_for("admin"), params={"isResolved": "false"})
-    return alerts[0]["id"] if alerts else None
+    # /api/alerts is paginated like every other listing, so the rows are under "items".
+    page = ctx.api_get("/api/alerts", token=ctx.token_for("admin"), params={"isResolved": "false"})
+    items = (page or {}).get("items") or []
+    return items[0]["id"] if items else None
 
 
 SCENARIOS: list[Scenario] = [

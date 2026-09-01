@@ -102,7 +102,7 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-104 cases across six files. Each file covers one area of the API.
+123 cases across six files. Each file covers one area of the API.
 
 ### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
 
@@ -121,7 +121,7 @@ are what keeps those documents honest.
 Rules: [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.2.
 
-### 4.2 `test_instances.py` — instance lifecycle and list conventions (36 cases)
+### 4.2 `test_instances.py` — instance lifecycle and list conventions (37 cases)
 
 | Case | Pins |
 |---|---|
@@ -134,6 +134,7 @@ Rules: [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md),
 | `list_instances_filters` | `status`, `region`, `instanceType`, `clientId`, and two filters combined |
 | `list_instances_sorts` | `-cpuUsage` descending, `instanceName` ascending, unknown field falls back to `id` instead of failing |
 | `list_instances_validates_query_parameters` | `page=0`, `size=0`, `size=101`, bad enums → `422` |
+| `pages_partition_a_non_unique_sort_without_gaps_or_repeats` | Walking `sort=status` — three distinct values across 15 rows, so nearly every row is tied — visits each row exactly once. This is what the `id` tiebreaker buys |
 | `list_instances_is_scoped_to_the_callers_clients` | manager1 sees 9, manager2 sees 6 |
 | `filtering_by_another_managers_client_returns_nothing` | `clientId` cannot be used to read across the scope boundary — empty result, not `403` |
 | `get_instance_returns_the_full_record` | Every field of `InstanceOut` |
@@ -150,7 +151,7 @@ Rules: [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFE
 [../api/CONVENTIONS.md](../api/CONVENTIONS.md),
 [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md).
 
-### 4.3 `test_member_c.py` — monitoring scans and the report (5 cases)
+### 4.3 `test_member_c.py` — monitoring scans and the report (12 cases)
 
 | Case | Pins |
 |---|---|
@@ -159,11 +160,16 @@ Rules: [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFE
 | `warnings_are_scoped_auto_recorded_and_deduplicated` | Scanning twice records one alert; resolving one lets the next scan record a fresh alert |
 | `error_and_long_stopped_monitoring_auto_record_without_duplicates` | ERROR `[5, 9]`, long-stopped `[3, 7, 13]`, no duplicates on rescan |
 | `full_report_and_manager_scope` | Exact counts, `$2,100` / `$1,260` totals, unresolved alert lists per role |
+| `a_scan_records_alerts_for_every_match_not_only_the_page` | **The rule pagination could most easily have broken.** `size=1` returns one instance and still records all four alerts |
+| `monitoring_pages_partition_the_matches` | Walking `size=2` yields `[1, 4, 11, 14]` — the whole match set, once each |
+| `monitoring_scans_are_unchanged_by_the_batch_size` | Same instances, same alert counts and same dedup outcome at `ID_BATCH_SIZE` 1 and 3 as at the default 500 — the batching is not observable |
+| `monitoring_rejects_out_of_range_paging` | `size=101` → `422` on all three scans |
+| `report_caps_the_embedded_alerts_but_not_the_count` | 29 unresolved alerts: `unresolvedAlertCount` is 29, `unresolvedAlerts` is the 20 newest |
 
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../team/MEMBER_C.md](../team/MEMBER_C.md).
 
-### 4.4 `test_alerts.py` — alert history and resolution (16 cases)
+### 4.4 `test_alerts.py` — alert history and resolution (23 cases)
 
 The `scanned` fixture runs all three monitoring scans as ADMIN first, producing the full
 set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
@@ -182,11 +188,16 @@ set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
 | `resolving_removes_the_alert_from_the_report` | The report count drops from 9 to 8 |
 | `resolving_another_managers_alert_is_forbidden` | `403`, and the alert stays unresolved |
 | `resolving_an_unknown_alert_is_404` | Body is `{"detail": ...}` with **no** `error` key — the documented shape inconsistency |
+| `alert_history_is_paginated` | `size=4` over nine alerts: `4 / 4 / 1`, and `total` stays 9 on every page |
+| `alert_pages_partition_the_history_without_gaps_or_repeats` | Every alert of a scan carries the same `detectedAt`, so this passes only because `id` breaks the tie |
+| `alert_history_page_past_the_end_is_empty_not_404` | `page=99` is a `200` with empty `items` |
+| `alert_history_rejects_out_of_range_paging` | `page=0`, `size=0`, `size=101` → `422` |
+| `alert_pagination_applies_after_filtering_and_scoping` | `total` is the scoped, filtered count — 2 for manager1's CPU alerts, not 4 |
 
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.
 
-### 4.5 `test_clients.py` — clients, cost and SLA (21 cases)
+### 4.5 `test_clients.py` — clients, cost and SLA (25 cases)
 
 | Case | Pins |
 |---|---|
@@ -197,6 +208,10 @@ Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 | `client_registration_validates_the_body` | Unknown plan, empty name, non-numeric id → `422` |
 | `client_list_is_scoped_by_role` | ADMIN 10, manager1 `1–5`, manager2 `6–10` |
 | `client_instances_are_listed_for_the_owning_manager` | `[1, 2, 3]` for VinaSoft |
+| `client_list_is_paginated` | `size=4` over ten clients: `[1–4]` then `[9, 10]`, `totalPages` 3 |
+| `client_list_pagination_counts_only_the_callers_clients` | manager1's `total` is 5, not 10 — the envelope never leaks the table size |
+| `client_instances_are_paginated` | `[1, 2]` then `[3]` for VinaSoft |
+| `cost_and_sla_still_cover_every_instance_not_a_page` | `costByInstance` and `instanceDetails` stay at 3 rows — the page bound must not leak into the arithmetic |
 | `client_sub_resources_enforce_scope_and_existence` | All four sub-resources: `403` across scope, `404` unknown client |
 | `current_cost_sums_every_instance_regardless_of_status` | `$620` including the STOPPED instance — stopped instances are still billed |
 | `current_cost_follows_a_newly_registered_instance` | Registering a SMALL adds exactly `$50` |

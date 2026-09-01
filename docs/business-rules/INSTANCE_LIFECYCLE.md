@@ -120,5 +120,6 @@ Screenshots of the `409` and the successful `204`:
 | [ALERTING.md](ALERTING.md) | Consumes `status` and `updatedAt` |
 | [COST.md](COST.md) | Consumes `instanceType` and `monthlyCost` |
 | [SLA.md](SLA.md) | Consumes `launchedAt`, `updatedAt`, `status` |
+| [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination, filtering and sorting `GET /api/instances` applies to these rows — including why `id` is appended to every sort |
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | Request/response shapes |
 | [../api/ERRORS.md](../api/ERRORS.md) | The `409` body |

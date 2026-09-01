@@ -14,6 +14,7 @@ app/
 ├── main.py                  FastAPI app, router registration, exception handlers, startup seed
 ├── config.py                Settings, unit pricing, SLA thresholds
 ├── database.py              SQLAlchemy engine, pool sizing, SQLite pragmas, SessionLocal, get_db
+├── pagination.py            The page/size query pair and the counting behind PageResponse
 ├── seed.py                  Idempotent demo data
 ├── models/                  M — SQLAlchemy ORM entities
 ├── schemas/                 V — Pydantic request/response DTOs
@@ -38,6 +39,14 @@ service layer testable without a web client and keeps HTTP vocabulary out of the
 
 The exception is `app/core/deps.py`, which raises `HTTPException` directly — it is
 already an HTTP-layer concern, so there is nothing to decouple.
+
+[app/pagination.py](../../app/pagination.py) sits outside the table above because it
+straddles two of its rows deliberately: it declares the `page` and `size` query
+parameters that controllers bind, and the `paginate()` helper that services call. Putting
+either half in the other layer would mean the bounds and the counting drifting apart
+across the seven endpoints that share them. It is a convention rather than a rule —
+nothing in it is specific to instances, alerts or clients — and the convention itself is
+[../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination).
 
 ---
 
@@ -72,6 +81,11 @@ Role scoping is applied two different ways depending on the endpoint shape — f
 query for lists, check-after-load for single resources. Both are described in
 [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md).
 
+Every list endpoint returns `(items, total, totalPages)` from its service and the
+controller wraps that in `PageResponse`. The service decides *what* the page is, because
+scoping and filtering decide what `total` counts; the controller only echoes back the
+`page` and `size` it was given.
+
 ---
 
 ## 3. Controllers
@@ -94,7 +108,7 @@ are declared once.
 | Module | Owns |
 |---|---|
 | [instance_service.py](../../app/services/instance_service.py) | Registration, listing/filter/sort, status transitions, deletion guard |
-| [monitor_service.py](../../app/services/monitor_service.py) | Detection thresholds, alert auto-recording and dedup, the report |
+| [monitor_service.py](../../app/services/monitor_service.py) | Detection thresholds, alert auto-recording and dedup, the batched scan walk, the report |
 | [alert_service.py](../../app/services/alert_service.py) | Alert history filtering, resolution |
 | [client_service.py](../../app/services/client_service.py) | Client CRUD, cost, forecast, SLA |
 | [llm_service.py](../../app/services/llm_service.py) | Anthropic call, prompt construction, rule-based fallback |

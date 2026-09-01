@@ -222,26 +222,43 @@ three **write alerts as a side effect** of the read, skipping any instance that 
 has an unresolved alert of that type — see
 [../business-rules/ALERTING.md](../business-rules/ALERTING.md).
 
+The three scans take `page` and `size` ([CONVENTIONS.md](CONVENTIONS.md#1-pagination))
+and answer with a `PageResponse`. **Pagination bounds the response, not the detection**:
+each records an alert for every instance meeting its condition, including instances on
+pages the caller never requests. `total` is therefore the number of instances currently
+matching, and the alert count after a first scan matches it — not the length of `items`.
+
 ### `GET /api/monitor/warnings` — High-CPU instances
 
 Returns `RUNNING` instances with `cpuUsage ≥ 80`, ordered by `id`, and records a
 `CPU_HIGH` alert for each.
 
-**Response** `200` — `InstanceOut[]`
+**Query parameters** — `page` (default `1`), `size` (default `10`, max `100`)
+
+**Response** `200` — `PageResponse[InstanceOut]`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/monitor/warnings?page=1&size=20"
+```
 
 ### `GET /api/monitor/errors` — Failed instances
 
 Returns instances in `ERROR` status and records a critical `ERROR_DETECTED` alert for
 each.
 
-**Response** `200` — `InstanceOut[]`
+**Query parameters** — `page`, `size`
+
+**Response** `200` — `PageResponse[InstanceOut]`
 
 ### `GET /api/monitor/long-stopped` — Idle instances
 
 Returns instances that have been `STOPPED` for at least 48 hours, measured from
 `updatedAt`, and records a `LONG_STOPPED` alert for each.
 
-**Response** `200` — `InstanceOut[]`
+**Query parameters** — `page`, `size`
+
+**Response** `200` — `PageResponse[InstanceOut]`
 
 ### `GET /api/monitor/report` — Aggregate report
 
@@ -255,8 +272,8 @@ Read-only; creates no alerts.
 | `instanceCountByStatus` | `{string: int}` | always contains `RUNNING`, `STOPPED`, `ERROR` — zero-filled |
 | `warningCount` | int | RUNNING instances with `cpuUsage ≥ 80` |
 | `totalMonthlyCost` | float | sum of `monthlyCost` over **all** visible instances, not only RUNNING |
-| `unresolvedAlertCount` | int | length of `unresolvedAlerts` |
-| `unresolvedAlerts` | `AlertOut[]` | newest first |
+| `unresolvedAlertCount` | int | **every** unresolved alert in scope, counted in SQL |
+| `unresolvedAlerts` | `AlertOut[]` | the **20 most recent** only, newest first |
 
 ```json
 {
@@ -268,6 +285,15 @@ Read-only; creates no alerts.
   "unresolvedAlerts": [ /* AlertOut */ ]
 }
 ```
+
+`unresolvedAlertCount` is a count, not a length. The embedded `unresolvedAlerts` array
+is capped at the 20 most recent, so on a busy system the count is larger than the array —
+the report is a dashboard summary, and the full history is `GET /api/alerts`, which
+paginates. Before the cap the report loaded and serialised every unresolved alert a
+caller could see purely to report that number, on the fastest-growing table in the schema
+([../performance/PERFORMANCE_BUGS.md § PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07)).
+
+The report itself takes no `page` or `size`: it is one aggregate object, not a list.
 
 `totalMonthlyCost` counting every instance is intentional: a stopped instance still
 carries its committed monthly cost. The RUNNING-only calculation belongs to the
@@ -281,14 +307,19 @@ forecast endpoint. See [../business-rules/COST.md](../business-rules/COST.md).
 
 **Query parameters**
 
-| Parameter | Type | Notes |
-|---|---|---|
-| `alertType` | `AlertType` | `CPU_HIGH` \| `ERROR_DETECTED` \| `LONG_STOPPED` |
-| `isResolved` | bool | |
-| `dateFrom` | date `YYYY-MM-DD` | `detectedAt` on or after, inclusive |
-| `dateTo` | date `YYYY-MM-DD` | `detectedAt` on or before, inclusive |
+| Parameter | Type | Default | Notes |
+|---|---|---|---|
+| `page` | int | `1` | `≥ 1` |
+| `size` | int | `10` | `1 – 100` |
+| `alertType` | `AlertType` | — | `CPU_HIGH` \| `ERROR_DETECTED` \| `LONG_STOPPED` |
+| `isResolved` | bool | — | |
+| `dateFrom` | date `YYYY-MM-DD` | — | `detectedAt` on or after, inclusive |
+| `dateTo` | date `YYYY-MM-DD` | — | `detectedAt` on or before, inclusive |
 
-**Response** `200` — `AlertOut[]`, ordered by `detectedAt` descending (newest first)
+**Response** `200` — `PageResponse[AlertOut]`, ordered by `detectedAt` descending (newest
+first), ties broken by `id` descending
+
+`AlertOut`:
 
 | Field | Type |
 |---|---|
@@ -302,8 +333,12 @@ forecast endpoint. See [../business-rules/COST.md](../business-rules/COST.md).
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
-  "http://127.0.0.1:8000/api/alerts?alertType=CPU_HIGH&isResolved=false"
+  "http://127.0.0.1:8000/api/alerts?alertType=CPU_HIGH&isResolved=false&size=50"
 ```
+
+`alerts` is the fastest-growing table in the schema — the monitoring scans append to it
+and nothing prunes it — so `total` here is a number that keeps climbing, and walking the
+history takes pages.
 
 ---
 
@@ -346,14 +381,23 @@ Resolving an already-resolved alert is a no-op: it returns `200` with the origin
 
 Scoped by role: ADMIN sees all, CLIENT_MANAGER sees only their own. Ordered by `id`.
 
-**Response** `200` — `ClientOut[]`
+**Query parameters** — `page` (default `1`), `size` (default `10`, max `100`)
+
+**Response** `200` — `PageResponse[ClientOut]`. `total` is the scoped count, so a
+`CLIENT_MANAGER` is never told how many clients exist outside their scope.
 
 ---
 
 ### `GET /api/clients/{id}/instances` — Instances of a client
 
-**Response** `200` — `InstanceOut[]`, ordered by `id`
+**Query parameters** — `page` (default `1`), `size` (default `10`, max `100`)
+
+**Response** `200` — `PageResponse[InstanceOut]`, ordered by `id`
 **Errors** — `401` · `403` · `404`
+
+The cost and SLA endpoints below are **not** paginated even though they embed a row per
+instance: their arithmetic covers every instance of the client, so the rows are loaded
+regardless. The page bound here does not apply to them.
 
 ---
 

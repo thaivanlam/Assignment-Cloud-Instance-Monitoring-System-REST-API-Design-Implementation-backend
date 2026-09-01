@@ -6,6 +6,7 @@ from app.config import SLA_THRESHOLDS, UNIT_PRICES
 from app.core.exceptions import NotFoundException, ValidationException
 from app.models import Client, Instance, InstanceStatus, Role
 from app.models.models import utcnow
+from app.pagination import DEFAULT_SIZE, paginate
 from app.schemas.schemas import ClientCreate
 
 
@@ -31,11 +32,14 @@ def create_client(db: Session, data: ClientCreate) -> Client:
     return client
 
 
-def list_clients(db: Session, client_ids: list[int] | None) -> list[Client]:
+def list_clients(
+    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+) -> tuple[list[Client], int, int]:
+    """One page of the clients the caller can see, ordered by `id`."""
     query = db.query(Client)
     if client_ids is not None:
         query = query.filter(Client.id.in_(client_ids or [-1]))
-    return query.order_by(Client.id).all()
+    return paginate(query.order_by(Client.id), Client.id, page, size)
 
 
 def get_client(db: Session, client_id: int) -> Client:
@@ -45,9 +49,28 @@ def get_client(db: Session, client_id: int) -> Client:
     return client
 
 
+def _client_instances_query(db: Session, client_id: int):
+    """Every instance of one client, ordered by `id`. Existence is the caller's business."""
+    return db.query(Instance).filter(Instance.clientId == client_id).order_by(Instance.id)
+
+
 def get_client_instances(db: Session, client_id: int) -> list[Instance]:
+    """Every instance of one client.
+
+    Deliberately unpaginated: the cost and SLA calculations below embed a row per
+    instance in their responses, so they have to load them all anyway. The paginated
+    form that `GET /api/clients/{id}/instances` serves is `list_client_instances`.
+    """
     get_client(db, client_id)
-    return db.query(Instance).filter(Instance.clientId == client_id).order_by(Instance.id).all()
+    return _client_instances_query(db, client_id).all()
+
+
+def list_client_instances(
+    db: Session, client_id: int, page: int = 1, size: int = DEFAULT_SIZE
+) -> tuple[list[Instance], int, int]:
+    """One page of a client's instances, ordered by `id`."""
+    get_client(db, client_id)
+    return paginate(_client_instances_query(db, client_id), Instance.id, page, size)
 
 
 def get_client_cost(db: Session, client_id: int) -> dict:
