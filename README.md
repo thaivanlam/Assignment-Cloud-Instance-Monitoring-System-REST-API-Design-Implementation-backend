@@ -45,7 +45,7 @@ role scoping and 124 functional tests.
 | 💵 | **Cost & forecast** | `SMALL $50` / `MEDIUM $120` / `LARGE $250` per month; the forecast counts only `RUNNING` instances |
 | 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
 | 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
-| 📚 | **Documented end to end** | Eleven documentation folders: API reference, business rules, ERD, walkthrough, performance and security findings |
+| 📚 | **Documented end to end** | Fifteen documentation folders: requirements (BRD/SRS/FRS/use cases), API reference, business rules, ERD, user manual, walkthrough, test cases, performance and security findings |
 | ✅ | **124 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
@@ -237,8 +237,10 @@ linking to the files inside it.
 | Folder | Contents |
 |---|---|
 | 🧭 [docs/onboarding/](docs/onboarding/README.md) | How to read this codebase for the first time, function by function |
+| 📋 [docs/requirements/](docs/requirements/README.md) | BRD, SRS, FRS and the use case / user story specification |
 | 📘 [docs/api/](docs/api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
 | 📗 [docs/business-rules/](docs/business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
+| 📖 [docs/manual/](docs/manual/README.md) | End-user manual for operating the system |
 | 📙 [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | 📐 [docs/design/](docs/design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | 🧪 [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
@@ -258,6 +260,11 @@ linking to the files inside it.
 | Topic | Document |
 |---|---|
 | Reading order for new contributors | [docs/onboarding/READING_ORDER.md](docs/onboarding/READING_ORDER.md) |
+| Business requirements (BRD) | [docs/requirements/BRD.md](docs/requirements/BRD.md) |
+| Software requirements (SRS) | [docs/requirements/SRS.md](docs/requirements/SRS.md) |
+| Functional specification (FRS) | [docs/requirements/FRS.md](docs/requirements/FRS.md) |
+| Use cases and user stories | [docs/requirements/USE_CASES.md](docs/requirements/USE_CASES.md) |
+| User manual | [docs/manual/USER_MANUAL.md](docs/manual/USER_MANUAL.md) |
 | API endpoint reference | [docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md) |
 | Authentication and JWT | [docs/api/AUTHENTICATION.md](docs/api/AUTHENTICATION.md) |
 | Pagination, filtering, sorting | [docs/api/CONVENTIONS.md](docs/api/CONVENTIONS.md) |
@@ -271,6 +278,7 @@ linking to the files inside it.
 | LLM diagnosis feature | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
 | Running the tests | [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) |
 | What the tests cover | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) |
+| Test cases with steps and expected results | [docs/testing/TEST_CASES.md](docs/testing/TEST_CASES.md) |
 | Performance bugs and fixes | [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md) |
 | Security bugs and fixes | [docs/security/SECURITY_BUGS.md](docs/security/SECURITY_BUGS.md) |
 | Deploying, upgrading, rolling back | [docs/operations/DEPLOYMENT.md](docs/operations/DEPLOYMENT.md) |
