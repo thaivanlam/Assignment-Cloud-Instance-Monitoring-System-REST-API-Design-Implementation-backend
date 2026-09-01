@@ -111,7 +111,38 @@ shows what its caption claims.
 
 ---
 
-## 7. Writing style
+## 7. The check that reminds you
+
+Rules 2, 3 and 6 all depend on someone remembering them at the moment they commit.
+[../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) remembers for you:
+it reads the staged paths, applies the mapping in [section 5](#5-source--document-mapping),
+and names the documents that were not staged alongside them.
+
+It **warns and lets the commit through**. The rule asks for a document only when
+*behaviour* changes, and no script can tell a behaviour change from a rename — so it
+reports candidates and leaves the judgement to you. A refactor that changes nothing
+observable needs nothing; the reminder is there for the change that does.
+
+Two entry points share the one script:
+
+| Entry point | Covers | Setup |
+|---|---|---|
+| Git `pre-commit` hook — [../../scripts/hooks/pre-commit](../../scripts/hooks/pre-commit) | Every commit, by anyone | `git config core.hooksPath scripts/hooks`, once per clone |
+| Claude Code `PreToolUse` hook — [../../.claude/settings.json](../../.claude/settings.json) | Commits made by an agent in this repository | None — the settings file is checked in |
+
+Run it by hand at any time against what is currently staged:
+
+```bash
+python scripts/check_docs_sync.py
+```
+
+The mapping lives twice — as the table in section 5 and as `MAPPING` in the script — so
+**a new row goes in both, in the same commit**. This file is governed by the rule it
+describes.
+
+---
+
+## 8. Writing style
 
 - **State the rule, then why it exists.** The reasoning is the part that cannot be
   recovered from the code.
@@ -126,13 +157,14 @@ shows what its caption claims.
 
 ---
 
-## 8. Related
+## 9. Related
 
 | Document | Why |
 |---|---|
 | [COMMITS.md](COMMITS.md) | Commit prefixes and message structure |
 | [README.md](README.md) | Contributing index |
 | [../screenshots/README.md](../screenshots/README.md) | The captures rule 6 keeps current, and what each one shows |
+| [../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) | The commit-time reminder rule 7 describes |
 | [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) | Where the change itself gets recorded |
 | [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the suite before you commit |
 | [../README.md](../README.md) | Documentation index |

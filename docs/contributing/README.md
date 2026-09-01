@@ -27,6 +27,13 @@ followed by a `docs:` commit.
 The Swagger captures in [../screenshots/](../screenshots/README.md) count as documents:
 a change that alters a response re-takes the affected images in that same commit.
 
+None of that is enforced by a gate, but it is *reminded*:
+[../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) reads the staged
+paths at commit time and names the documents the mapping asks for that were not staged.
+It warns and lets the commit through — see
+[DOCUMENTATION.md § 7](DOCUMENTATION.md#7-the-check-that-reminds-you) for how to install
+it.
+
 ## Related
 
 | Document | Why |
@@ -36,5 +43,6 @@ a change that alters a response re-takes the affected images in that same commit
 | [../README.md](../README.md) | Documentation index — where each document lives |
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | Which layer a change belongs in |
 | [../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md) | Running the tests before you commit |
+| [../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) | The commit-time reminder for the rule above |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Verifying the same behaviour by hand |
 | [../../CLAUDE.md](../../CLAUDE.md) | Condensed form of these rules, loaded automatically by Claude Code |

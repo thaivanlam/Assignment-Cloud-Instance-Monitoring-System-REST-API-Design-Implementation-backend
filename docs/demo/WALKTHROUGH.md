@@ -293,6 +293,10 @@ status code, schema, and section structure are identical either way, which is wh
 the endpoint safe to demo offline
 ([../design/LLM_FEATURE.md](../design/LLM_FEATURE.md)).
 
+A slow or unreachable provider does not stall the demo either: the call times out after
+30 seconds and is retried once, so the answer arrives within about a minute at worst —
+as the rule-based one, if it comes to that.
+
 ---
 
 ## Running the tests

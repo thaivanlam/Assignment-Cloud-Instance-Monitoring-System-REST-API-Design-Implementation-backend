@@ -1,9 +1,9 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Two — [PERF-01](#perf-01) and
-[PERF-02](#perf-02) — have since been fixed; the **Status** column below says which are
-still open.
+findings, ranked by the load at which they start to hurt. Three — [PERF-01](#perf-01),
+[PERF-02](#perf-02) and [PERF-03](#perf-03) — have since been fixed; the **Status**
+column below says which are still open.
 
 Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
@@ -21,7 +21,7 @@ challenged.
 |---|---|---|---|---|
 | [PERF-01](#perf-01) | Monitoring polls take an exclusive write lock on the whole database | `services/monitor_service.py` | Critical | **Fixed** |
 | [PERF-02](#perf-02) | Connection pool (15) is smaller than request concurrency (40) | `database.py` | Critical | **Fixed** |
-| [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | Open |
+| [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | **Fixed** |
 | [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | Open |
 | [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | Open |
 | [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | Open |
@@ -180,18 +180,20 @@ Measured, 40 threads each borrowing a connection and holding it for 3 seconds, w
 | Sized (20 + 20 = 40) | 40 / 40 | 0 |
 
 What this does **not** fix: a handler that holds its connection for minutes rather than
-milliseconds still exhausts the pool — 40 slow LLM diagnoses now do what 15 used to
-([PERF-03](#perf-03)). Sizing the pool buys headroom; it does not bound how long a request
-may keep a connection.
+milliseconds still exhausts the pool — 40 slow LLM diagnoses would have done what 15 used
+to. Sizing the pool buys headroom; it does not bound how long a request may keep a
+connection. That bound is what [PERF-03](#perf-03) adds for the one handler that needed
+it.
 
 ---
 
 ### PERF-03
 
 **A single LLM diagnosis can hold a worker and a database connection for ~30 minutes.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-2) at the end of this finding.
 
-[llm_service.py:49](../../app/services/llm_service.py#L49) calls `client.messages.create()`
-with no `timeout=` and no `max_retries=`. Measured SDK defaults (`anthropic 0.120.2`):
+`llm_service.py` built its Anthropic client with no `timeout=` and no `max_retries=`, so
+the SDK's own defaults applied. Measured (`anthropic 0.120.2`):
 
 ```
 DEFAULT_TIMEOUT     Timeout(connect=5.0, read=600, write=600, pool=600)
@@ -199,25 +201,68 @@ DEFAULT_MAX_RETRIES 2
 ```
 
 600-second read timeout across 3 attempts is roughly **30 minutes** worst case. For that
-entire window the request holds:
+entire window the request held:
 
 - one of the 40 threadpool slots ([PERF-02](#perf-02)), and
-- one of the 15 pool connections — `get_db` opens the session *before* the handler runs
-  and closes it only after it returns, so the session is pinned across the whole network
-  call even though the last query finished before it started.
+- one of the pool connections — `get_db` opens the session *before* the handler runs and
+  closes it only after it returns, so the session was pinned across the whole network
+  call even though the last query had finished before it started.
 
-Fifteen slow diagnosis calls exhaust the pool for **every** endpoint, including
+Enough slow diagnosis calls therefore exhaust the pool for **every** endpoint, including
 `GET /`.
 
-**Fix.**
+#### The fix that landed
 
-```python
-client = anthropic.Anthropic(api_key=api_key, timeout=30.0, max_retries=1)
-```
+Both halves were applied: bound the wait, and stop holding a connection through it.
 
-and release the database before the call — the handler already has everything it needs
-(`instance` and `alerts`) loaded by then, so the session can be closed or the objects
-detached before `diagnose()` is invoked.
+1. **A timeout and a retry cap on the client**
+   ([llm_service.py:23](../../app/services/llm_service.py#L23)):
+
+   ```python
+   TIMEOUT_SECONDS = 30.0
+   MAX_RETRIES = 1
+   ```
+
+   passed to every `anthropic.Anthropic(...)` the service builds, on both the
+   key-supplied and the environment-resolved branch. Worst case falls from ~30 minutes to
+   **60 seconds** (2 attempts × 30 s). The numbers are a product decision, not a tuning
+   one: a diagnosis that has not answered in 30 seconds is no longer useful to an
+   operator reading an incident card, and the rule-based fallback — instant, and already
+   the answer whenever no key is configured — is the better response past that point. One
+   retry still absorbs a transient connection error.
+
+2. **The connection goes back to the pool before the call**
+   ([instance_controller.py:126](../../app/controllers/instance_controller.py#L126)). The
+   handler loads the instance, runs the access check, loads the 10 alerts, and then calls
+   `db.close()` before `llm_service.diagnose(...)`. `Session.close()` releases the
+   transactional resources and *resets* the session rather than tearing it down, so the
+   `db.close()` in `get_db`'s `finally` is a no-op; the rows it loaded are detached but
+   **not** expired, so `instance.instanceName`, the alert fields the prompt renders, and
+   the response body all keep reading from memory.
+
+The fallback path is unaffected — it never touched the database either.
+
+Measured, 20 concurrent diagnosis requests against the real engine with the provider call
+stubbed to a barrier, so all 20 sit in the network call at the same instant:
+
+| | Connections held during the provider call |
+|---|---|
+| Before | 20 / 20 |
+| After | **0** |
+
+| | Worst-case wait for one diagnosis |
+|---|---|
+| Before | 600 s read × 3 attempts ≈ 30 min |
+| After | 30 s read × 2 attempts = **60 s** |
+
+All 104 functional tests pass unchanged.
+
+What this does **not** fix: the request still occupies one of the 40 threadpool workers
+for the length of the call — bounded at 60 seconds now, but still held. Releasing that
+too means `async def` plus `AsyncAnthropic`, which
+[../design/LLM_FEATURE.md § 8](../design/LLM_FEATURE.md#8-known-limitations-and-future-work)
+records as future work. The client is also still constructed per request
+([PERF-14](#perf-14)).
 
 ---
 
@@ -499,15 +544,16 @@ weakening the KDF.
 
 **A new Anthropic HTTP client is constructed per diagnosis request.**
 
-[llm_service.py:48](../../app/services/llm_service.py#L48) builds
+[llm_service.py:57](../../app/services/llm_service.py#L57) builds
 `anthropic.Anthropic(...)` on every call. Each construction creates a fresh `httpx` client
 with its own connection pool, so every diagnosis pays a full TCP and TLS handshake with no
 connection reuse — and the client is never closed, leaving sockets to the garbage
 collector.
 
-**Fix.** Build one client lazily at module level and reuse it. The `import anthropic`
-inside the function is fine as is (module imports are cached after the first call), but the
-client should not follow it.
+**Fix.** Build one client lazily at module level and reuse it, carrying the same
+`timeout` and `max_retries` [PERF-03](#perf-03) added. The `import anthropic` inside the
+function is fine as is (module imports are cached after the first call), but the client
+should not follow it.
 
 ---
 
@@ -539,7 +585,7 @@ Ordered by benefit per unit of risk, not by severity.
 | 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low |
 | 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
 | 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low — **done** |
-| 5 | Timeout and retry cap on the Anthropic client | [PERF-03](#perf-03) | Low |
+| 5 | Timeout and retry cap on the Anthropic client, and the session released before the call | [PERF-03](#perf-03) | Low — **done** |
 | 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule |
 | 7 | Count without the sort; conditional join | [PERF-08](#perf-08), [PERF-09](#perf-09) | Low |
 | 8 | Scope filter as a subquery; drop the lazy loads | [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
@@ -592,15 +638,27 @@ by ten repeat polls of each monitoring endpoint through `TestClient` as `ADMIN`.
 what the before/after table under [PERF-01](#perf-01) reports.
 
 **SDK defaults** — read from the installed package, `anthropic 0.120.2`:
-`anthropic._constants.DEFAULT_TIMEOUT` and `DEFAULT_MAX_RETRIES`.
+`anthropic._constants.DEFAULT_TIMEOUT` and `DEFAULT_MAX_RETRIES`. The worst-case
+waits under [PERF-03](#perf-03) are those two against the module's `TIMEOUT_SECONDS`
+and `MAX_RETRIES`, read back off a constructed client (`client.timeout`,
+`client.max_retries`) to confirm the SDK took them.
+
+**Connections held across the provider call** — 20 concurrent
+`GET /api/instances/5/diagnosis` requests through `TestClient` against a file-backed
+engine, with `_llm_diagnosis` replaced by a `threading.Barrier` so that all 20 sit in
+the stand-in for the network call at the same instant; one of them reads
+`engine.pool.checkedout()` there. Running it with and without the early `db.close()`
+is the before/after table under [PERF-03](#perf-03).
 
 Caveats worth stating: the counts come from the 16-instance seed, so absolute numbers are
 small — what matters is which of them **scale with the result set**
 ([PERF-05](#perf-05), [PERF-06](#perf-06), [PERF-07](#perf-07)). The query plans are
 SQLite's; a different backend would plan differently, though the missing indexes would
 still be missing. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
-connection-pool level rather than through the API, and [PERF-03](#perf-03) is still derived
-from configured limits rather than from an observed failure.
+connection-pool level rather than through the API, and the 30-minute figure in
+[PERF-03](#perf-03) is derived from the SDK's configured limits rather than from an
+observed timeout — its connection-hold counts, however, come from real requests
+through the app.
 
 ---
 

@@ -8,8 +8,9 @@ Instance Monitoring System: **automatic incident diagnosis for a cloud instance*
 | Endpoint | `GET /api/instances/{id}/diagnosis` |
 | Provider / SDK | Anthropic Claude, official `anthropic` Python SDK (`>=0.116.0`) |
 | Model | `claude-opus-4-8` |
+| Request limits | 30 s timeout, 1 retry — 60 s worst case |
 | Service module | [app/services/llm_service.py](../../app/services/llm_service.py) |
-| Controller | [app/controllers/instance_controller.py:98-125](../../app/controllers/instance_controller.py#L98-L125) |
+| Controller | [app/controllers/instance_controller.py:98-135](../../app/controllers/instance_controller.py#L98-L135) |
 | Response DTO | `DiagnosisResponse` in [app/schemas/schemas.py:144-149](../../app/schemas/schemas.py#L144-L149) |
 
 ---
@@ -39,6 +40,7 @@ instance_controller.diagnose_instance()
         │  1. load instance (404 if missing)
         │  2. assert_client_access(member, instance.client)   ← JWT + role scoping
         │  3. load 10 most recent alerts (ORDER BY detectedAt DESC)
+        │  4. db.close()  ← release the pooled connection before the network call
         ▼
 llm_service.diagnose(instance, alerts) -> (text, source)
         │
@@ -65,6 +67,9 @@ DiagnosisResponse (JSON)
 - **Fail-open, never fail-closed.** A monitoring endpoint that returns 500 because a
   third-party API is down is worse than one that returns a slightly less insightful
   answer. Hence the fallback.
+- **Bounded wait, and nothing held during it.** The provider call is capped at 30
+  seconds per attempt with a single retry, and the handler returns its database
+  connection to the pool before making the call. See § 4.5.
 
 ### 2.1 The two execution paths
 
@@ -82,10 +87,11 @@ Triggered when `anthropic.Anthropic()` resolves a credential (`ANTHROPIC_API_KEY
 diagnose()
   └─ _llm_diagnosis()
        1. import anthropic
-       2. client = anthropic.Anthropic()          # resolves credential from env
+       2. client = anthropic.Anthropic(          # credential from .env or env
+              timeout=30.0, max_retries=1)
        3. _build_context(instance, alerts)        # flatten ORM rows to text
        4. client.messages.create(
-              model="claude-opus-4-8", max_tokens=1024,
+              model="claude-opus-4-8", max_tokens=16000,
               thinking={"type": "adaptive"},
               system=<persona + 3-section contract>,
               messages=[{"role": "user", "content": task + context}])
@@ -94,9 +100,10 @@ diagnose()
   └─ return (text, "llm")
 ```
 
-Characteristics: network round trip (typically a few seconds), token cost per call,
-output wording varies between calls, and reasoning quality is highest — the model can
-weigh CPU history, alert timing, and instance age against each other.
+Characteristics: network round trip (typically a few seconds, at most 60 — see § 4.5),
+token cost per call, output wording varies between calls, and reasoning quality is
+highest — the model can weigh CPU history, alert timing, and instance age against each
+other.
 
 #### Path B — no API key, or the call fails (`source: "rule-based"`)
 
@@ -110,6 +117,7 @@ Triggered when **any** of the following occurs — all are caught by the same
 | Key lacks model access | `PermissionDeniedError` (403) |
 | Rate limit or quota exhausted | `RateLimitError` (429) |
 | Provider outage | `APIStatusError` (5xx) |
+| Provider slower than 30 s, twice | `APITimeoutError` after the retry (§ 4.5) |
 | No network (offline demo, air-gapped CI) | `APIConnectionError` |
 | `anthropic` package not installed | `ImportError` |
 | Model returned only non-text blocks | text empty after strip → `None` |
@@ -144,7 +152,7 @@ section headings as Path A, so the client renders it with the same component.
 | Response schema | `DiagnosisResponse` | `DiagnosisResponse` (identical) |
 | Section structure | Probable Causes / Recommended Actions / Prevention | same |
 | External call | Yes — Anthropic Messages API | None |
-| Latency | Seconds (network + inference) | Effectively instant |
+| Latency | Seconds (network + inference), 60 s ceiling | Effectively instant |
 | Cost | Per-token | Zero |
 | Determinism | Varies per call | Fully deterministic |
 | Reasoning depth | Correlates metrics, timing, and history | Fixed threshold rules only |
@@ -242,7 +250,7 @@ Field-selection rationale:
 ```python
 client.messages.create(
     model="claude-opus-4-8",
-    max_tokens=1024,
+    max_tokens=16000,
     thinking={"type": "adaptive"},
     system=SYSTEM_PROMPT,
     messages=[{"role": "user", "content": task + context}],
@@ -252,18 +260,21 @@ client.messages.create(
 | Parameter | Value | Reason |
 |---|---|---|
 | `model` | `claude-opus-4-8` | Highest-capability tier for a reasoning-heavy diagnostic task; the write-up is read by an engineer who will act on it, so quality outweighs per-call cost at this volume. |
-| `max_tokens` | `1024` | ~4× the 250-word cap — enough headroom that the answer is never truncated mid-section, while bounding worst-case cost. Well below the threshold where non-streaming requests risk an HTTP timeout. |
+| `max_tokens` | `16000` | Adaptive thinking spends its reasoning tokens out of this **same** budget, so the cap has to cover the thinking as well as the ~250-word answer; a tight cap consumes it all and returns a truncated or empty result. The prompt's word limit, not this number, is what bounds the answer — a `stop_reason` of `max_tokens` is logged as a warning. |
 | `thinking` | `{"type": "adaptive"}` | Correlating metrics with alert history is multi-step reasoning. Adaptive thinking lets the model choose its own depth per request instead of a fixed budget. On this model family adaptive is the only supported on-mode — a fixed `budget_tokens` budget is rejected — and omitting the parameter entirely would run with no thinking at all. |
 | *(no `temperature` / `top_p`)* | — | Sampling parameters are not accepted on this model family and would return HTTP 400. Style is steered by the prompt instead. |
 | *(no streaming)* | — | Output is a single short block delivered in one JSON response; there is no incremental UI to feed. |
 
 ### 3.5 Authentication
 
-The SDK client is constructed with no arguments — `anthropic.Anthropic()` — so it
-resolves credentials from the environment in the standard order: `ANTHROPIC_API_KEY`
-(read from `.env` via `app/config.py`), then `ANTHROPIC_AUTH_TOKEN`, then a local
-`ant auth login` profile. No key is ever hard-coded, and the key is not required for
-the endpoint to work.
+When `ANTHROPIC_API_KEY` is set, the key pydantic-settings read from `.env` is handed to
+the client explicitly — the SDK reads the *environment variable*, never `.env`, so the
+two are not the same thing. With nothing configured, the client is constructed without a
+key and the SDK resolves credentials itself in the standard order: `ANTHROPIC_API_KEY`
+from the shell, then `ANTHROPIC_AUTH_TOKEN`, then a local `ant auth login` profile. No
+key is ever hard-coded, and the key is not required for the endpoint to work.
+
+Both branches construct the client with the same request limits (§ 4.5).
 
 ---
 
@@ -332,6 +343,48 @@ The endpoint sits behind the same guards as the rest of the API:
   instance; a `CLIENT_MANAGER` only instances belonging to clients they manage.
 - Only instance metadata and alert messages leave the process; member identities,
   client contact details, and credentials are never included in the prompt.
+
+### 4.5 Request limits and the database connection
+
+The provider call is the only part of this API that waits on a third party, and it is
+the only handler that spends most of its time not touching the database. Two limits keep
+that wait from becoming everyone else's problem
+([../performance/PERFORMANCE_BUGS.md § PERF-03](../performance/PERFORMANCE_BUGS.md#perf-03)).
+
+**A bounded wait.** The SDK's own defaults are a 600-second read timeout and 2 retries —
+roughly 30 minutes for a single diagnosis. The service overrides both:
+
+```python
+TIMEOUT_SECONDS = 30.0
+MAX_RETRIES = 1
+```
+
+60 seconds worst case, and a diagnosis that exceeds it becomes an `APITimeoutError`,
+which is caught like every other provider failure and answered from the rule-based
+fallback. That is the right trade for this endpoint: an operator reading an incident card
+is not served by an answer that arrives half an hour later, and the fallback — already
+the answer on any machine without a key — is instant.
+
+**No connection held across it.** `get_db` keeps a session, and therefore a pooled
+connection, checked out for the whole request. The handler has everything it needs
+loaded before the call, so it calls `db.close()` first:
+
+```python
+alerts = db.query(Alert)...all()
+db.close()                                   # connection back to the pool
+diagnosis, source = llm_service.diagnose(instance, alerts)
+```
+
+`Session.close()` *resets* the session rather than tearing it down, so `get_db` closing
+it again after the response is a no-op. The rows it loaded are detached but **not**
+expired — their loaded values stay readable, which is what lets `_build_context()` render
+the prompt and the response body read `instance.instanceName` afterwards. The invariant
+to preserve: **every field the prompt or the response needs must be loaded before
+`db.close()`**, relationships included. Adding a field that lazy-loads after that line
+raises `DetachedInstanceError`.
+
+Measured with 20 concurrent diagnosis requests all inside the provider call at once: 20
+connections held before, **0** after.
 
 ---
 
@@ -464,9 +517,10 @@ fallback so its causes stay consistent with the monitoring rules used elsewhere.
 - **No caching.** Repeated calls for the same unchanged instance re-invoke the model.
   Caching the result keyed on `(instanceId, updatedAt, latest alert id)` would remove
   redundant calls.
-- **Synchronous call.** The request blocks on the provider. Under load, moving to the
-  async client (`AsyncAnthropic`) with an `async def` endpoint would avoid tying up a
-  worker thread.
+- **Synchronous call.** The request blocks on the provider, occupying one of the 40
+  threadpool workers for up to 60 seconds. Its database connection is released first
+  (§ 4.5), so the pool is not affected, but the worker is still held; freeing that too
+  means the async client (`AsyncAnthropic`) with an `async def` endpoint.
 - **No usage tracking.** `response.usage` is discarded; recording input/output tokens
   per call would enable cost attribution per client.
 - **Single language.** Output is pinned to English. A `lang` query parameter mapped
@@ -483,4 +537,5 @@ fallback so its causes stay consistent with the monitoring rules used elsewhere.
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | `DiagnosisResponse` in the endpoint reference |
 | [../api/ERRORS.md](../api/ERRORS.md) | Why there is no `5xx` for provider failures |
 | [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | How the alert history in the prompt is produced |
+| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | PERF-03, the request limits and the connection release of § 4.5 |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Demo step for this endpoint |

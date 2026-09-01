@@ -1,0 +1,2 @@
+# Shell hooks must keep LF endings: a CRLF shebang line breaks sh on macOS and Linux.
+scripts/hooks/* text eol=lf

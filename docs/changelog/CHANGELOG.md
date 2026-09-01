@@ -16,6 +16,8 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--perf-03-fixed-the-llm-call-is-bounded-and-holds-no-connection) | PERF-03 fixed | A diagnosis waits at most 60 s, and holds no database connection while it waits |
+| [2026-09-01](#2026-09-01--docs-sync-check) | Docs-sync check | The documentation rule is reminded at commit time, not only written down |
 | [2026-09-01](#2026-09-01--screenshots-follow-the-api) | Screenshots follow the API | Swagger captures are re-taken in the commit that invalidates them |
 | [2026-09-01](#2026-09-01--database-engine-document) | Database engine document | Which pool each `DATABASE_URL` gets, and where in-memory SQLite is used |
 | [2026-08-31](#2026-08-31--perf-02-fixed-the-connection-pool-matches-the-request-concurrency) | PERF-02 fixed | The pool serves 40 concurrent requests instead of 15 |
@@ -32,6 +34,114 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — PERF-03 fixed: the LLM call is bounded and holds no connection
+
+The third and last critical performance finding closed. No API contract changed — same
+route, same schema, same status codes — and all 104 tests pass unchanged.
+
+### Fixed
+
+- **The Anthropic client now has a timeout and a retry cap.**
+  `anthropic.Anthropic(...)` was constructed with neither, so the SDK's defaults applied:
+  a 600-second read timeout across 3 attempts, roughly **30 minutes** for one diagnosis,
+  with the request holding a threadpool worker throughout.
+  [../../app/services/llm_service.py](../../app/services/llm_service.py) now sets
+  `TIMEOUT_SECONDS = 30.0` and `MAX_RETRIES = 1` on both construction branches — the one
+  that hands over the key from `.env` and the one that lets the SDK resolve credentials
+  itself — for a **60-second** worst case. A diagnosis that exceeds it raises
+  `APITimeoutError`, which the existing `except Exception` already treats like any other
+  provider failure: the caller still gets `200` with `source: "rule-based"`. The numbers
+  are a product choice, not a tuning one — an answer that arrives half an hour after an
+  incident is worth less than the instant deterministic one.
+- **The database connection goes back to the pool before the provider call.** `get_db`
+  keeps a session, and therefore a pooled connection, checked out for the whole request,
+  and this is the one handler that spends most of its time on the network with no query
+  left to run. `diagnose_instance` loads the instance, runs the access check, loads the 10
+  most recent alerts, and then calls `db.close()` before `llm_service.diagnose(...)`
+  ([../../app/controllers/instance_controller.py](../../app/controllers/instance_controller.py)).
+  `Session.close()` resets the session rather than tearing it down, so the `get_db` close
+  after the response is a no-op, and it detaches the loaded rows **without** expiring them,
+  so the prompt and the response body keep reading their values from memory. Measured with
+  20 concurrent diagnoses all inside the provider call at once: **20** connections held
+  before, **0** after.
+
+The invariant this introduces: every field the prompt or the response needs must be loaded
+before `db.close()`, relationships included — a field added after that line would raise
+`DetachedInstanceError`. It is written down in
+[../design/LLM_FEATURE.md § 4.5](../design/LLM_FEATURE.md#45-request-limits-and-the-database-connection).
+
+Still open: the request occupies a threadpool worker for the length of the call — bounded
+at 60 seconds now, but held. Freeing that means `AsyncAnthropic` with an `async def`
+endpoint, recorded as future work. The client is also still built per request
+([PERF-14](../performance/PERFORMANCE_BUGS.md#perf-14)).
+
+### Documentation
+
+- [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) — new § 4.5 *Request limits and the
+  database connection*; the flow diagram, Path A pseudocode, the failure-trigger table, the
+  authentication section and the *Synchronous call* limitation updated to match. The
+  `max_tokens` row of § 3.4 was corrected in passing: it documented `1024`, while the code
+  has sent `16000` since adaptive thinking was enabled — thinking tokens come out of the
+  same budget.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-03 marked
+  **Fixed**, with what landed, what it does not, and the before/after tables; the
+  connection-hold method added to § How these were measured, and the caveat that PERF-03
+  was derived rather than observed narrowed to the 30-minute figure alone.
+- [../performance/README.md](../performance/README.md),
+  [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md),
+  [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [WALKTHROUGH.md](../demo/WALKTHROUGH.md) and
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) updated to match.
+
+---
+
+## 2026-09-01 — Docs-sync check
+
+One commit turning rule 3 into a commit-time reminder. No application source changed.
+
+### Added
+
+- **[../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py)** — reads the
+  staged paths, applies the § 5 source → document mapping, and names the documents that
+  were not staged beside the code. It **warns and lets the commit through**: the rule
+  asks for a document when *behaviour* changes, and no script can tell a behaviour change
+  from a rename, so it reports candidates and leaves the judgement to the author. Beyond
+  the mapping it reminds about the four conditional documents — the Swagger captures for
+  a source that can alter a response, [CHANGELOG.md](CHANGELOG.md) and
+  [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) for any `app/` change, and
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) only when the staged
+  diff actually adds or removes a `def` or a `class`, since that document cites line
+  numbers. Staging any one of a source's mapped documents silences it for that source.
+- **[../../scripts/hooks/pre-commit](../../scripts/hooks/pre-commit)** — runs the script
+  for every contributor. Installed once per clone with
+  `git config core.hooksPath scripts/hooks`; the repository had no hook directory before
+  this, only git's `.sample` files. A first `.gitattributes` pins `scripts/hooks/*` to LF
+  endings — this clone has `core.autocrlf=true`, and a CRLF shebang line stops `sh` from
+  running the hook at all on macOS and Linux.
+- **A `PreToolUse` hook in [../../.claude/settings.json](../../.claude/settings.json)** —
+  runs the same script with `--hook` before any `git commit` an agent issues, and answers
+  with the warning as `systemMessage` and `additionalContext`. The settings file is
+  checked in, so this side needs no per-clone setup. The existing `WebFetch` permissions
+  are untouched.
+
+### Documentation
+
+- **Added rule 7, *The check that reminds you*, to
+  [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#7-the-check-that-reminds-you)**
+  — what the check does, why it warns instead of blocking, the two entry points and their
+  setup, and the requirement that a new mapping row lands in both the § 5 table and the
+  script's `MAPPING`. *Writing style* and *Related* renumbered to 8 and 9; the § 5 and § 6
+  anchors cited elsewhere are unchanged.
+- **Recorded it in the summaries that describe the rule set** — the *short version* and
+  *Related* table in [../contributing/README.md](../contributing/README.md),
+  *Conventions for these documents* in [../README.md](../README.md), and *Contributing*
+  plus the `scripts/` line of the project tree in the root
+  [README.md](../../README.md).
+- **Condensed it into [../../CLAUDE.md](../../CLAUDE.md)** next to the mapping, so an
+  agent knows both that the mapping has a second copy to keep in step and that the hook's
+  warning is a reminder to act on.
 
 ---
 

@@ -115,6 +115,16 @@ def diagnose_instance(
         .limit(10)
         .all()
     )
+    # Every field the diagnosis and the response below need is loaded by now, so hand
+    # the connection back before the provider call rather than after it. `get_db` keeps
+    # its session — and therefore its pooled connection — checked out for the whole
+    # request, and this is the one handler that spends most of its time on the network:
+    # 40 concurrent diagnoses would otherwise empty the pool for every other endpoint.
+    # `close()` resets the session and detaches the rows it loaded without expiring them,
+    # so their values stay readable and the `get_db` close in `finally` is a no-op.
+    # See docs/performance/PERFORMANCE_BUGS.md § PERF-03.
+    db.close()
+
     diagnosis, source = llm_service.diagnose(instance, alerts)
     return DiagnosisResponse(
         instanceId=instance.id,
