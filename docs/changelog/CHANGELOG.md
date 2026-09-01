@@ -16,6 +16,9 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--operations-runbooks) | Operations runbooks | Deployment, configuration and 15 incident runbooks for whoever is on call |
+| [2026-09-01](#2026-09-01--perf-05-fixed-a-scan-dedups-in-one-query-and-writes-in-one-insert) | PERF-05 fixed | A monitoring scan costs three statements instead of two per instance |
+| [2026-09-01](#2026-09-01--perf-04-fixed-the-filtered-and-sorted-columns-are-indexed) | PERF-04 fixed | Every list endpoint seeks its rows instead of scanning the table |
 | [2026-09-01](#2026-09-01--perf-03-fixed-the-llm-call-is-bounded-and-holds-no-connection) | PERF-03 fixed | A diagnosis waits at most 60 s, and holds no database connection while it waits |
 | [2026-09-01](#2026-09-01--docs-sync-check) | Docs-sync check | The documentation rule is reminded at commit time, not only written down |
 | [2026-09-01](#2026-09-01--screenshots-follow-the-api) | Screenshots follow the API | Swagger captures are re-taken in the commit that invalidates them |
@@ -34,6 +37,150 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Operations runbooks
+
+The documentation covered how the system is built and how it behaves, but not how to run
+it — the tenth folder answers that. No code behaviour changed.
+
+### Documentation
+
+- **[../operations/](../operations/README.md)** — a new folder for running the API:
+  [DEPLOYMENT.md](../operations/DEPLOYMENT.md) (local, single-server and Vercel launches,
+  what a healthy start logs, the four calls that verify a deployment, upgrade, rollback,
+  backup and reset), [CONFIGURATION.md](../operations/CONFIGURATION.md) (every setting and
+  its precedence, generating `SECRET_KEY`, the Anthropic key and its fallback, what
+  `DATABASE_URL` selects, reading back the effective configuration with secrets redacted)
+  and [RUNBOOKS.md](../operations/RUNBOOKS.md) (fifteen incident runbooks — symptom, cause,
+  fix, verification — with a 60-second triage, a guide to the log lines, and what to
+  collect before escalating).
+- Every error message, command and expected output in the three documents was reproduced
+  against this repository rather than recalled — the startup and bind-failure logs, the
+  `unable to open database file` and missing-driver failures, the LLM fallback warning
+  line, the index listing, the `PRAGMA journal_mode`/`integrity_check` probes, the
+  `VACUUM INTO` backup, and the four verification calls against a running server.
+- Two operational consequences that were implicit are now stated where an operator will
+  look for them: the default `SECRET_KEY` is published in this repository and must be
+  replaced before a deployment is reachable, and a serverless deployment cannot keep its
+  database — every cold start re-seeds
+  ([../performance/PERFORMANCE_BUGS.md § PERF-15](../performance/PERFORMANCE_BUGS.md#perf-15)).
+
+### Changed
+
+- **The docs-sync check maps two more sources.** `app/config.py` now also asks for
+  [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) and `app/main.py` for
+  [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md), in both copies of the
+  mapping — section 5 of [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md)
+  and `MAPPING` in [../../scripts/check_docs_sync.py](../../scripts/check_docs_sync.py) —
+  so a new setting or a change to the startup hook reminds its operator document too.
+
+---
+
+## 2026-09-01 — PERF-05 fixed: a scan dedups in one query and writes in one insert
+
+The second high-severity performance finding closed. The alerting rule is unchanged — same
+guard, same alerts, same ordering — and all 104 tests pass unchanged.
+
+### Fixed
+
+- **Alert deduplication no longer runs one query per instance.** Each monitoring scan
+  called `_has_unresolved_alert` inside its loop, so a scan cost one `SELECT` per matching
+  instance plus one `INSERT` per alert — the statement count grew with the result set, on
+  the three endpoints a dashboard polls most often.
+  [../../app/services/monitor_service.py](../../app/services/monitor_service.py) now reads
+  back which of the scanned instances already carry an unresolved alert of that type in a
+  single query, and inserts the alerts for the rest as one batch. Measured on the seeded
+  demo data, an `ADMIN` `GET /api/monitor/warnings` fell from **14 statements to 8** on the
+  first scan and from **6 to 3** on the repeat poll — and the two groups that scaled with
+  the result set are now one statement each, so 500 matching instances would cost the same
+  three statements as four do.
+- **The batch insert is a Core `insert()`, not `add_all`.** The ORM has to read back the
+  generated `id` of every row it writes, and SQLite's `RETURNING` gives no order guarantee
+  to correlate them by, so `add_all` still emitted one `INSERT` per alert — measured, not
+  assumed. A scan never uses the alert rows it writes, so the ids are not needed and the
+  whole batch goes out as a single `executemany`. `isResolved` and `detectedAt` still come
+  from the model's column defaults.
+- **The dedup probe's `IN` list is chunked** at `ID_BATCH_SIZE = 500`. SQLite rejects a
+  statement with more than 32,766 bind parameters, and these endpoints put no upper bound
+  on how many instances they return ([PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07)),
+  so an unchunked list would have traded an N+1 for an outright failure on a large enough
+  deployment. Driving the scans with the batch size forced to 1, 2 and 3 produces the same
+  instances, alert counts and dedup outcome as the default.
+
+### Documentation
+
+- [../business-rules/ALERTING.md](../business-rules/ALERTING.md) — § 3 *Duplicate
+  prevention* describes the check as one query for the scan rather than a call per
+  instance, and states that the rule it enforces is unchanged.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-05 marked
+  **Fixed**, with what landed, the before/after statement counts for all three endpoints as
+  both roles, and the after-trace; the PERF-01, PERF-04 and PERF-06 cross-references that
+  called the dedup probe per-instance corrected; the measurement method now records how the
+  "before" column was produced and how the chunking was checked.
+- [../performance/README.md](../performance/README.md) — the fixed count and a PERF-05
+  bullet.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — stop 43 is
+  `_instances_with_unresolved_alert` and stop 44 `_record_alerts`, with the line numbers
+  the change moved.
+
+---
+
+## 2026-09-01 — PERF-04 fixed: the filtered and sorted columns are indexed
+
+The first of the high-severity performance findings closed. No API contract changed — same
+routes, same schemas, same status codes — and all 104 tests pass unchanged.
+
+### Fixed
+
+- **The columns the API filters and sorts on are now indexed.** `index=True` appeared only
+  on primary keys and `members.email`, and SQLite creates no index for a foreign key on its
+  own, so every list endpoint was a full table scan: `SCAN instances` for the main list,
+  `SCAN clients` for the accessible-client lookup every `CLIENT_MANAGER` request makes, and
+  `SCAN alerts` for the dedup probe each monitoring scan runs *once per instance*.
+  [../../app/models/models.py](../../app/models/models.py) declares five indexes —
+  `clients.managerId`, `instances.(clientId, status)`, `instances.region`,
+  `instances.updatedAt`, and the composite `alerts.(instanceId, alertType, isResolved)`
+  with `alerts.detectedAt` beside it. Measured on the same seeded data, every one of those
+  scans became a `SEARCH … USING INDEX`, and the two `USE TEMP B-TREE FOR ORDER BY` steps —
+  the alert listing's `detectedAt` sort and `?sort=-updatedAt` — disappeared.
+  A sixth index, on `alerts.isResolved`, was proposed by the finding and **not** added:
+  measured, it makes `GET /api/alerts?isResolved=false` slower, because nearly every row is
+  `false`, so SQLite takes the index, matches almost the whole table, and then has to sort
+  what it matched instead of reading it in order off `ix_alerts_detectedAt`.
+- **Startup creates any index the database file is missing.** `Base.metadata.create_all`
+  skips a table that already exists and its indexes with it, so a declared index would never
+  reach a `monitoring.db` created before the declaration — and the project has no migration
+  step. `lifespan` ([../../app/main.py](../../app/main.py)) now follows `create_all` with one
+  `index.create(bind=engine, checkfirst=True)` per index in the metadata. It is idempotent,
+  issues no `CREATE` on a file that already has them all, and means this change needs no
+  database rebuild. Indexes are the one schema change that reaches an existing file this
+  way; a column change still means deleting `monitoring.db`.
+
+Still open on the same code paths: the dedup probe is a seek now but there is still one of
+them per instance ([../performance/PERFORMANCE_BUGS.md#perf-05](../performance/PERFORMANCE_BUGS.md#perf-05)),
+the pagination count still sorts in order to count
+([PERF-08](../performance/PERFORMANCE_BUGS.md#perf-08)), and two `ADMIN`-path scans stay
+scans — `check_warnings` filters on the unindexed `cpuUsage`, and `check_long_stopped`'s
+range on `updatedAt` is one SQLite still prefers to scan.
+
+### Documentation
+
+- [../design/ERD.md](../design/ERD.md) — new § *Indexes*: what is indexed, what each index
+  serves, and why `alerts.isResolved` and `cost_snapshots.clientId` are deliberately left
+  out. The *No migrations* known gap now records the index exception.
+- [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — § 5 *Startup* is a three-step
+  list; step 2 is the index pass and why `create_all` alone is not enough.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-04 marked
+  **Fixed**, with what landed, the before/after plan table, the rejected sixth index and
+  what the indexes do not fix; the PERF-05 and PERF-10 cross-references that called these
+  queries full scans corrected; the measurement method now records how both columns of the
+  plan table were produced — including that dropping indexes from a live connection leaves
+  the plans unchanged, so the "before" column needs its own engine.
+- [../performance/README.md](../performance/README.md),
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — the fixed count, and
+  the `main.py` and `models.py` line numbers the change moved.
 
 ---
 

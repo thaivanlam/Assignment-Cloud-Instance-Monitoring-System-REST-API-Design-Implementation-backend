@@ -59,9 +59,15 @@ scan only ever generates alerts for their own clients' instances
 
 ## 3. Duplicate prevention
 
-Before inserting, `_record_alert()` checks for an existing alert with the **same
-`instanceId`, the same `alertType`, and `isResolved == false`**. If one exists, the
-insert is skipped.
+Before inserting, a scan checks for an existing alert with the **same `instanceId`, the
+same `alertType`, and `isResolved == false`**. Where one exists, the insert is skipped.
+
+`_record_alerts()` applies that check to the whole scan at once: one query reads back
+which of the scanned instances already carry an unresolved alert of the type being
+recorded, and the instances missing from that set are inserted as a batch. The rule is
+per instance exactly as before — this is one statement for a scan rather than two per
+instance, and it is invisible through the API
+([../performance/PERFORMANCE_BUGS.md § PERF-05](../performance/PERFORMANCE_BUGS.md#perf-05)).
 
 The consequence:
 
@@ -135,7 +141,7 @@ report contents.
 | Document | Why |
 |---|---|
 | [INSTANCE_LIFECYCLE.md](INSTANCE_LIFECYCLE.md) | Why `updatedAt` is trustworthy |
-| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Why a scan that records nothing does not commit |
+| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Why a scan that records nothing does not commit, and why it dedups in one query |
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | Monitoring and alert endpoint shapes |
 | [../team/MEMBER_C.md](../team/MEMBER_C.md) | Assignment scope for monitoring |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Demonstrating dedup by scanning twice |

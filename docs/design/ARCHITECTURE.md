@@ -110,11 +110,17 @@ receives `(text, source)`. Swapping provider or prompt touches nothing else. See
 `lifespan()` in [app/main.py](../../app/main.py) runs on boot:
 
 1. `Base.metadata.create_all(bind=engine)` — creates any missing tables.
-2. `seed(db)` — populates demo data, returning immediately if a member already exists.
+2. `index.create(bind=engine, checkfirst=True)` for every index in the metadata — creates
+   any missing index. `create_all` skips a table that already exists and its indexes with
+   it, so this second pass is what lets an index be added to a database file that predates
+   it. It is idempotent: on a file that already has them all it issues no `CREATE`.
+3. `seed(db)` — populates demo data, returning immediately if a member already exists.
 
 There are no migrations. The schema is created from the ORM models, which is adequate
 for an assignment with a disposable SQLite file but would need Alembic for anything
-longer-lived — a column change today means deleting `monitoring.db`.
+longer-lived — a column change today means deleting `monitoring.db`. Step 2 is the narrow
+exception: indexes, which are additive and safe to create against live data, do reach an
+existing file. Which columns are indexed and why: [ERD.md § Indexes](ERD.md#indexes).
 
 ### SQLite connection settings
 

@@ -57,17 +57,17 @@ order; [../api/OVERVIEW.md](../api/OVERVIEW.md) lists all 19 endpoints.
 
 ## Stage 1 — The entry point
 
-**File:** [app/main.py](../../app/main.py) — 79 lines, and the map of everything else.
+**File:** [app/main.py](../../app/main.py) — 86 lines, and the map of everything else.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 1 | `lifespan` | [main.py:25](../../app/main.py#L25) | On startup: create tables, then `seed(db)`. This is why a working database exists with no migration step. |
-| 2 | `app = FastAPI(...)` | [main.py:32](../../app/main.py#L32) | Title, description and demo credentials shown in Swagger; `lifespan` wired in here. |
-| 3 | `active_instance_handler` | [main.py:48](../../app/main.py#L48) | `ActiveInstanceException` → `409` |
-| 4 | `not_found_handler` | [main.py:56](../../app/main.py#L56) | `NotFoundException` → `404` |
-| 5 | `forbidden_handler` | [main.py:61](../../app/main.py#L61) | `ForbiddenException` → `403` |
-| 6 | `validation_handler` | [main.py:66](../../app/main.py#L66) | `ValidationException` → `400` |
-| 7 | `health` | [main.py:78](../../app/main.py#L78) | The only endpoint that needs no token |
+| 1 | `lifespan` | [main.py:25](../../app/main.py#L25) | On startup: create tables, create any missing index, then `seed(db)`. This is why a working database exists with no migration step. |
+| 2 | `app = FastAPI(...)` | [main.py:39](../../app/main.py#L39) | Title, description and demo credentials shown in Swagger; `lifespan` wired in here. |
+| 3 | `active_instance_handler` | [main.py:55](../../app/main.py#L55) | `ActiveInstanceException` → `409` |
+| 4 | `not_found_handler` | [main.py:63](../../app/main.py#L63) | `NotFoundException` → `404` |
+| 5 | `forbidden_handler` | [main.py:68](../../app/main.py#L68) | `ForbiddenException` → `403` |
+| 6 | `validation_handler` | [main.py:73](../../app/main.py#L73) | `ValidationException` → `400` |
+| 7 | `health` | [main.py:85](../../app/main.py#L85) | The only endpoint that needs no token |
 
 **The idea worth carrying forward:** services never import `HTTPException`. They raise
 domain exceptions, and these four handlers are the single place where a domain failure
@@ -125,9 +125,9 @@ in dependency order.
 | 12 | `Role`, `ContractPlan`, `InstanceType`, `InstanceStatus`, `AlertType` | [models.py:14-40](../../app/models/models.py#L14-L40) | Five `str`-based enums, reused verbatim by the Pydantic schemas — so the API accepts and returns exactly these strings. |
 | 13 | `Member` | [models.py:43](../../app/models/models.py#L43) | Login identity plus role. The `clients` back-reference is what role scoping is built on. |
 | 14 | `Client` | [models.py:56](../../app/models/models.py#L56) | `managerId` — the single column that decides what a `CLIENT_MANAGER` may see. |
-| 15 | `Instance` | [models.py:70](../../app/models/models.py#L70) | `monthlyCost` is *stored*, not computed on read. `updatedAt` carries `onupdate=utcnow` — Stage 5 uses it as the "status changed at" clock. |
-| 16 | `Alert` | [models.py:94](../../app/models/models.py#L94) | `isResolved` + `resolvedAt`; `cascade="all, delete-orphan"` from `Instance`, so deleting an instance takes its alerts with it. |
-| 17 | `CostSnapshot` | [models.py:108](../../app/models/models.py#L108) | **Written by the seed, read by nothing.** A deliberate, documented gap — see [../design/ERD.md](../design/ERD.md). Do not go hunting for the service that queries it. |
+| 15 | `Instance` | [models.py:70](../../app/models/models.py#L70) | `monthlyCost` is *stored*, not computed on read. `updatedAt` carries `onupdate=utcnow` — Stage 5 uses it as the "status changed at" clock. `__table_args__` opens the class with the indexes the list endpoints need. |
+| 16 | `Alert` | [models.py:101](../../app/models/models.py#L101) | `isResolved` + `resolvedAt`; `cascade="all, delete-orphan"` from `Instance`, so deleting an instance takes its alerts with it. |
+| 17 | `CostSnapshot` | [models.py:130](../../app/models/models.py#L130) | **Written by the seed, read by nothing.** A deliberate, documented gap — see [../design/ERD.md](../design/ERD.md). Do not go hunting for the service that queries it. |
 
 ### 2.4 `app/schemas/schemas.py` — the wire format
 
@@ -281,13 +281,13 @@ in the project, and the one whose three private helpers explain the other four f
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 43 | `_has_unresolved_alert` | [monitor_service.py:11](../../app/services/monitor_service.py#L11) | Is there already an open alert of this type on this instance? |
-| 44 | `_record_alert` | [monitor_service.py:24](../../app/services/monitor_service.py#L24) | **The deduplication rule.** Adds an alert *unless* an unresolved one of the same type exists. This is why calling `GET /api/monitor/warnings` ten times produces one alert, not ten — and why resolving an alert lets the next scan raise a fresh one. |
-| 45 | `_commit_if_recorded` | [monitor_service.py:33](../../app/services/monitor_service.py#L33) | Commits a scan **only if** it actually inserted something. A poll that dedup silenced writes nothing, so it must not take SQLite's write lock either — why this exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
-| 46 | `check_warnings` | [monitor_service.py:44](../../app/services/monitor_service.py#L44) | `cpuUsage >= 80` **and** status `RUNNING` — a stopped instance's stale CPU reading never warns. Records `CPU_HIGH` per hit, with at most one `commit` for the batch — and none at all when dedup skipped every insert. |
-| 47 | `check_errors` | [monitor_service.py:66](../../app/services/monitor_service.py#L66) | Status `ERROR` → `ERROR_DETECTED`, message prefixed `[CRITICAL]`. |
-| 48 | `check_long_stopped` | [monitor_service.py:83](../../app/services/monitor_service.py#L83) | `STOPPED` and `updatedAt <= now - 48h` → `LONG_STOPPED`. This is the function that depends on the idempotent-PATCH guard from stop 35; read the two as a pair. |
-| 49 | `build_report` | [monitor_service.py:108](../../app/services/monitor_service.py#L108) | Read-only, unlike the three above. Counts by status via `GROUP BY`, warning count, `SUM(monthlyCost)` wrapped in `coalesce` so an empty scope returns `0.0` rather than `None`, and unresolved alerts newest-first. |
+| 43 | `_instances_with_unresolved_alert` | [monitor_service.py:17](../../app/services/monitor_service.py#L17) | Which of these instances already have an open alert of this type? One query for the whole scan, its `IN` list chunked at `ID_BATCH_SIZE` so it stays inside SQLite's bind-parameter limit. |
+| 44 | `_record_alerts` | [monitor_service.py:35](../../app/services/monitor_service.py#L35) | **The deduplication rule.** Adds an alert for each instance *unless* an unresolved one of the same type exists. This is why calling `GET /api/monitor/warnings` ten times produces one alert, not ten — and why resolving an alert lets the next scan raise a fresh one. One probe and one batched `INSERT` per scan, not two statements per instance: [../performance/PERFORMANCE_BUGS.md § PERF-05](../performance/PERFORMANCE_BUGS.md#perf-05). |
+| 45 | `_commit_if_recorded` | [monitor_service.py:70](../../app/services/monitor_service.py#L70) | Commits a scan **only if** it actually inserted something. A poll that dedup silenced writes nothing, so it must not take SQLite's write lock either — why this exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
+| 46 | `check_warnings` | [monitor_service.py:81](../../app/services/monitor_service.py#L81) | `cpuUsage >= 80` **and** status `RUNNING` — a stopped instance's stale CPU reading never warns. Records `CPU_HIGH` for the hits, with at most one `commit` for the batch — and none at all when dedup skipped every insert. |
+| 47 | `check_errors` | [monitor_service.py:103](../../app/services/monitor_service.py#L103) | Status `ERROR` → `ERROR_DETECTED`, message prefixed `[CRITICAL]`. |
+| 48 | `check_long_stopped` | [monitor_service.py:120](../../app/services/monitor_service.py#L120) | `STOPPED` and `updatedAt <= now - 48h` → `LONG_STOPPED`. This is the function that depends on the idempotent-PATCH guard from stop 35; read the two as a pair. |
+| 49 | `build_report` | [monitor_service.py:145](../../app/services/monitor_service.py#L145) | Read-only, unlike the three above. Counts by status via `GROUP BY`, warning count, `SUM(monthlyCost)` wrapped in `coalesce` so an empty scope returns `0.0` rather than `None`, and unresolved alerts newest-first. |
 
 **The surprise worth internalising:** three of these are `GET` endpoints that *write* to the
 database. Scanning is what creates alerts — there is no scheduler in this system. If you
