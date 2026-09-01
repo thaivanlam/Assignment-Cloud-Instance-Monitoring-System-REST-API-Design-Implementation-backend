@@ -11,7 +11,7 @@ it would take to fix.
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 104 tests pass and the API returns correct answers throughout. Three findings are rated
-critical:
+critical, and all three are now fixed:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -24,17 +24,20 @@ critical:
   on SQLAlchemy's default 15 — so past 15 concurrent requests the surplus ones timed out
   with a 500. The pool is now sized from that same number: 20 kept open plus 20 overflow,
   40 threads to 40 connections.
-- **PERF-03** — the LLM diagnosis call sets no timeout, so the SDK defaults apply: a
-  600-second read timeout across 3 attempts, holding a worker and a connection the entire
-  time.
+- **PERF-03** — *fixed.* The LLM diagnosis call set no timeout, so the SDK defaults
+  applied: a 600-second read timeout across 3 attempts — ~30 minutes — holding a worker
+  and a pooled connection the entire time. The client now runs with a 30-second timeout
+  and one retry, a 60-second worst case, and the handler hands its connection back
+  before calling the provider, so a diagnosis in flight holds none
+  ([../design/LLM_FEATURE.md](../design/LLM_FEATURE.md)).
 
 The remaining twelve range from missing indexes on every foreign key (**PERF-04**) down to
 notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is
 correct as written and should not be changed.
 
 Every figure is measured against the seeded demo database, not estimated; the method is at
-the end of the document so any number can be reproduced. Two findings, PERF-01 and
-PERF-02, have been fixed; the rest are recorded and still open.
+the end of the document so any number can be reproduced. Three findings — PERF-01,
+PERF-02 and PERF-03 — have been fixed; the rest are recorded and still open.
 
 ## Related
 
