@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--perf-09-fixed-the-alert-listing-joins-only-when-it-has-to) | PERF-09 fixed | An `ADMIN` reading alert history no longer joins `instances` for a column nothing uses |
 | [2026-09-01](#2026-09-01--perf-07-fixed-every-list-endpoint-is-paginated) | PERF-07 fixed | Every list endpoint paginates — **breaking**; a response no longer grows with the table |
 | [2026-09-01](#2026-09-01--perf-06-fixed-a-commit-no-longer-re-selects-the-rows-it-returns) | PERF-06 fixed | A monitoring scan is four statements whether it returns 4 rows or 500 |
 | [2026-09-01](#2026-09-01--operations-runbooks) | Operations runbooks | Deployment, configuration and 15 incident runbooks for whoever is on call |
@@ -39,6 +40,65 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — PERF-09 fixed: the alert listing joins only when it has to
+
+The first of the two remaining medium findings closed, and the smallest fix in this
+series: two lines moved inside a branch. No behaviour changed. 124 tests pass — the 123
+that existed, unchanged, plus one new one.
+
+### Fixed
+
+- **`list_alerts` joins `instances` only when a scope has to be applied.**
+  [../../app/services/alert_service.py](../../app/services/alert_service.py) joined
+  unconditionally, but the join exists solely to reach `Instance.clientId` for a
+  `CLIENT_MANAGER`'s scope filter. An `ADMIN` has `client_ids is None`, never applies that
+  filter, and was paying an index lookup into `instances` for every row scanned — twice per
+  request since [PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07) added the count query
+  over the same statement. Both `ADMIN` plans lose their per-row
+  `SEARCH instances USING COVERING INDEX ix_instances_id`; the count's plan collapses to a
+  single `SCAN alerts USING COVERING INDEX ix_alerts_id`. The `CLIENT_MANAGER` query is
+  byte for byte what it was.
+- **Measured as a time, not a count**, because the statement count does not change — 3 for
+  an `ADMIN`, 4 for a `CLIENT_MANAGER`, before and after. Median of 60 `ADMIN`
+  `GET /api/alerts` requests: unchanged at 4.0 ms on the seed's 9 alerts, and **5.7 ms →
+  4.5 ms** with the table grown to 20,009. The join costs what `alerts` costs, and `alerts`
+  is the table nothing prunes. At seed scale the difference is inside the noise, which the
+  finding says rather than rounding in its own favour.
+
+### Added
+
+- **`test_deleting_an_instance_removes_its_alerts_from_the_history`** in
+  [../../tests/test_alerts.py](../../tests/test_alerts.py). An inner join filters as well
+  as costs, so removing one is only safe if no alert can outlive its instance — otherwise
+  an orphaned row would now be listed to an `ADMIN` while still hidden from a
+  `CLIENT_MANAGER`. `Instance.alerts` is declared `cascade="all, delete-orphan"`, so none
+  can. The test deletes instance 3 after a scan and asserts its `LONG_STOPPED` alert goes
+  with it and the history falls from 9 to 8, because losing that cascade would now be a
+  visible bug rather than only a storage one.
+
+### Documentation
+
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-09 marked
+  **Fixed**, with what landed, the safety argument for dropping an inner join, the
+  before/after plans and latencies, and what is deliberately left alone on the
+  `CLIENT_MANAGER` path. Two corrections in place: the finding's quoted plan still carried
+  a `USE TEMP B-TREE FOR ORDER BY` that
+  [PERF-04](../performance/PERFORMANCE_BUGS.md#perf-04) and PERF-07 had already removed, so
+  the join was the whole of the remaining waste; and the measurement section said the seed
+  holds 16 instances where it has always held 15
+  ([../demo/SEED_DATA.md](../demo/SEED_DATA.md)). Step 8 of the suggested order splits into
+  8a (done) and 8b, since the conditional join carries none of the risk that the auth-path
+  changes do.
+- [../business-rules/ALERTING.md](../business-rules/ALERTING.md) — § 5 now says why the
+  delete cascade is load-bearing for the listing rather than merely tidy.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md),
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md),
+  [../performance/README.md](../performance/README.md) and the test counts in
+  [../../README.md](../../README.md) and [../../CLAUDE.md](../../CLAUDE.md) — the new case,
+  the moved `resolve_alert` line reference, 9 of 15 findings fixed, 123 → 124.
 
 ---
 
