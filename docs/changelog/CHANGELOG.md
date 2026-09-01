@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--perf-06-fixed-a-commit-no-longer-re-selects-the-rows-it-returns) | PERF-06 fixed | A monitoring scan is four statements whether it returns 4 rows or 500 |
 | [2026-09-01](#2026-09-01--operations-runbooks) | Operations runbooks | Deployment, configuration and 15 incident runbooks for whoever is on call |
 | [2026-09-01](#2026-09-01--perf-05-fixed-a-scan-dedups-in-one-query-and-writes-in-one-insert) | PERF-05 fixed | A monitoring scan costs three statements instead of two per instance |
 | [2026-09-01](#2026-09-01--perf-04-fixed-the-filtered-and-sorted-columns-are-indexed) | PERF-04 fixed | Every list endpoint seeks its rows instead of scanning the table |
@@ -37,6 +38,66 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — PERF-06 fixed: a commit no longer re-`SELECT`s the rows it returns
+
+The third high-severity performance finding closed, and the last one that made a
+statement count grow with a response. No behaviour changed and all 104 tests pass
+unchanged.
+
+### Fixed
+
+- **`SessionLocal` sets `expire_on_commit=False`.** On SQLAlchemy's default a `commit()`
+  marks every object the session has loaded expired, so the next read of any attribute
+  re-fetches its row. The monitoring endpoints commit the alerts they recorded and then
+  return the instances they scanned, so serialising the response issued one `SELECT` per
+  row — a wasted round trip for each instance in the answer.
+  [../../app/database.py](../../app/database.py) now builds the factory with the expiry
+  off. Measured on the seeded demo data, an `ADMIN` `GET /api/monitor/warnings` first scan
+  fell from **8 statements to 4**, `/errors` from 6 to 4 and `/long-stopped` from 7 to 4;
+  as a `CLIENT_MANAGER` all three fell from 7 to 5. With
+  [PERF-05](../performance/PERFORMANCE_BUGS.md#perf-05) this makes a scan a fixed four
+  statements at any result size — 500 matching instances would cost what four do, against
+  1,502 before the two fixes.
+- **Nothing relied on the expiry.** The four functions that want state back after their
+  commit — `create_instance`, `update_status`, `create_client` and `resolve_alert` — call
+  `db.refresh()` explicitly on the following line, and each was measured to issue exactly
+  the statements it did before: `POST /api/instances` 4, `PATCH /api/instances/{id}/status`
+  5, `PATCH /api/alerts/{id}/resolve` 6, `POST /api/clients` 4. `GET /api/monitor/report`
+  never commits, so it never had anything to expire, and is unchanged at 5.
+- **The test fixture got the same argument.** `tests/conftest.py` builds its own session
+  factory, so without it the suite would have gone on exercising SQLAlchemy's defaults
+  rather than the session the API runs on. The tests that read the session directly after
+  a request — the post-delete `db.get(Instance, 1) is None`, the `updatedAt` comparison
+  across an idempotent update — pass unchanged, which is what a change to expiry semantics
+  would break first.
+
+### Documentation
+
+- [../design/DATABASE.md](../design/DATABASE.md) — a new § 3 *The session factory*: what
+  each `sessionmaker` argument does, why SQLAlchemy's expiry default is the wrong one for
+  a per-request session, the measured cost it carried, and what `db.refresh()` still does.
+  Sections 3–7 renumbered to 4–8; the § 2 link from
+  [../operations/RUNBOOKS.md](../operations/RUNBOOKS.md) is unaffected.
+- [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — § 5 gains *The session factory*
+  beside the pool and pragma subsections.
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-06 marked
+  **Fixed**, with what landed, the before/after counts for all three endpoints as both
+  roles, and the unchanged-endpoint table. The finding's claim that the waste happened
+  "even when nothing was written" is corrected in place: that measurement predates
+  [PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01), and since a repeat poll stopped
+  committing it has had no expiry to pay for — re-measured, a repeat poll costs the same
+  with and without this fix. The measurement method records how the "before" column was
+  produced.
+- [../performance/README.md](../performance/README.md) — the fixed count, a PERF-06 bullet,
+  and DATABASE.md added to the related table.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) — § 2 lists the session
+  factory among the details that make the fixture work.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — stop 8 notes the
+  setting; stops 9, 10, 77 and the `get_db` seam note carry the line numbers the change
+  moved.
 
 ---
 

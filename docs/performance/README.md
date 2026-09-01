@@ -11,7 +11,7 @@ it would take to fix.
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 104 tests pass and the API returns correct answers throughout. Three findings are rated
-critical, and all three are now fixed, as are the first two of the high-severity ones:
+critical, and all three are now fixed, as are the first three of the high-severity ones:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -42,20 +42,30 @@ critical, and all three are now fixed, as are the first two of the high-severity
   single batched `INSERT` — an `ADMIN` warnings poll fell from 6 statements to 3, and a
   first scan from 14 to 8. The dedup rule itself is unchanged
   ([../business-rules/ALERTING.md](../business-rules/ALERTING.md)).
+- **PERF-06** — *fixed.* The session factory used SQLAlchemy's default expiry, so a
+  `commit()` expired every row the request had loaded and serialising the response
+  re-`SELECT`ed each one — a wasted round trip per row returned. `expire_on_commit=False`
+  removes them: an `ADMIN` warnings first scan fell from 8 statements to 4. Nothing relied
+  on the expiry — the four services that want post-commit state call `db.refresh()`
+  explicitly ([../design/DATABASE.md § 3](../design/DATABASE.md#3-the-session-factory)).
 
-The remaining ten range from the post-commit re-`SELECT` per row (**PERF-06**) down to
-notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is
-correct as written and should not be changed.
+With PERF-05 and PERF-06 both closed, a monitoring scan costs the same number of
+statements whether it returns 4 instances or 500. The remaining nine findings range from
+six unbounded list endpoints (**PERF-07**) down to notes recorded deliberately rather than
+as defects — the login KDF cost (**PERF-13**) is correct as written and should not be
+changed.
 
 Every figure is measured against the seeded demo database, not estimated; the method is at
-the end of the document so any number can be reproduced. Five findings — PERF-01, PERF-02,
-PERF-03, PERF-04 and PERF-05 — have been fixed; the rest are recorded and still open.
+the end of the document so any number can be reproduced. Six findings — PERF-01, PERF-02,
+PERF-03, PERF-04, PERF-05 and PERF-06 — have been fixed; the rest are recorded and still
+open.
 
 ## Related
 
 | Document | Why |
 |---|---|
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | The layering and session handling the findings sit in |
+| [../design/DATABASE.md](../design/DATABASE.md) | The engine, pool and session factory behind PERF-02 and PERF-06 |
 | [../design/ERD.md](../design/ERD.md) | The schema, and the indexes PERF-04 added to it |
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The diagnosis endpoint behind PERF-03 and PERF-14 |
 | [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 had to preserve, and did |
