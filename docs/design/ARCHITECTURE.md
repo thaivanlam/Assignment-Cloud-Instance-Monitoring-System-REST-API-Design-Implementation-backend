@@ -148,6 +148,9 @@ skipped for an in-memory SQLite URL, which gets a `SingletonThreadPool` that has
 overflow to size. Background:
 [../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02).
 
+Which pool class each `DATABASE_URL` gets, and why the in-memory mode belongs to the tests
+alone: [DATABASE.md](DATABASE.md).
+
 ---
 
 ## 6. Configuration
@@ -180,6 +183,7 @@ restart, and the derived dicts will not pick up a runtime mutation of `settings`
 | Document | Why |
 |---|---|
 | [ERD.md](ERD.md) | The tables the models define |
+| [DATABASE.md](DATABASE.md) | Engine and pool selection, and the in-memory SQLite mode |
 | [LLM_FEATURE.md](LLM_FEATURE.md) | The one service with an external dependency |
 | [../business-rules/](../business-rules/README.md) | What lives in the service layer |
 | [../api/](../api/README.md) | What the controllers expose |

@@ -62,6 +62,10 @@ hashes three demo passwords at 260,000 PBKDF2 iterations; memoising it for the s
 cuts the suite's runtime by roughly two thirds. Only the seed is memoised — every login
 still verifies its password for real.
 
+Why the fixture builds its own engine at all, and what an in-memory database gives up
+compared with the file the application runs on:
+[../design/DATABASE.md](../design/DATABASE.md).
+
 The real `monitoring.db` file is never opened: the `get_db` override redirects every
 session, and the startup lifespan that would seed it does not run under `TestClient`.
 

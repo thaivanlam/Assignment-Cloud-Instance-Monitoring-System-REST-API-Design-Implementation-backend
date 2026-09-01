@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--database-engine-document) | Database engine document | Which pool each `DATABASE_URL` gets, and where in-memory SQLite is used |
 | [2026-08-31](#2026-08-31--perf-02-fixed-the-connection-pool-matches-the-request-concurrency) | PERF-02 fixed | The pool serves 40 concurrent requests instead of 15 |
 | [2026-08-31](#2026-08-31--perf-01-fixed-monitoring-polls-no-longer-lock-the-database) | PERF-01 fixed | Scans commit only when they record; SQLite runs in WAL |
 | [2026-08-31](#2026-08-31--onboarding-path-and-change-history) | Onboarding path and change history | A reading order through `app/`, and this changelog |
@@ -30,6 +31,36 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Database engine document
+
+One commit adding documentation only. No source changed.
+
+### Documentation
+
+- **Added [../design/DATABASE.md](../design/DATABASE.md)** — where `DATABASE_URL` comes
+  from, which pool class SQLAlchemy picks per URL (`QueuePool` for a file,
+  `SingletonThreadPool` for in-memory), and why passing `pool_size`/`max_overflow` to the
+  latter is a `TypeError` at import — the reason `IS_MEMORY_SQLITE` exists in
+  [../../app/database.py](../../app/database.py). It answers *where in-memory SQLite is
+  actually used*: only the `api` fixture in [../../tests/conftest.py](../../tests/conftest.py),
+  which overrides the pool with `StaticPool` so the test thread and FastAPI's worker
+  thread share one database instead of getting one empty database each. It also records
+  what that mode gives up — no pool sizing, no WAL (`PRAGMA journal_mode=WAL` returns
+  `memory`), no persistence, no sharing across processes — and that running the
+  application itself on `sqlite:///:memory:` imports cleanly and then fails the first
+  request with `no such table: members`, because the schema is created on the main thread
+  and every handler runs in a worker thread with its own connection.
+- **Linked from** [../design/README.md](../design/README.md),
+  [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) § 5,
+  [../testing/README.md](../testing/README.md),
+  [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) § 2,
+  [../README.md](../README.md) and the root [README.md](../../README.md).
+- **Extended the source → document mapping** in
+  [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md#5-source--document-mapping)
+  with a row for `app/database.py`, which had none.
 
 ---
 

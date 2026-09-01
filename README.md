@@ -234,7 +234,7 @@ linking to the files inside it.
 | 📘 [docs/api/](docs/api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
 | 📗 [docs/business-rules/](docs/business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
 | 📙 [docs/demo/](docs/demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
-| 📐 [docs/design/](docs/design/README.md) | Architecture, ERD, LLM feature design |
+| 📐 [docs/design/](docs/design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | 🧪 [docs/testing/](docs/testing/README.md) | Functional test suite and how to run it |
 | ⚡ [docs/performance/](docs/performance/README.md) | Measured latency, throughput and concurrency findings |
 | 👥 [docs/team/](docs/team/README.md) | Per-member assignment scope |
@@ -259,6 +259,7 @@ linking to the files inside it.
 | Demo walkthrough | [docs/demo/WALKTHROUGH.md](docs/demo/WALKTHROUGH.md) |
 | Data model (ERD) | [docs/design/ERD.md](docs/design/ERD.md) |
 | Architecture | [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) |
+| Database engine and in-memory SQLite | [docs/design/DATABASE.md](docs/design/DATABASE.md) |
 | LLM diagnosis feature | [docs/design/LLM_FEATURE.md](docs/design/LLM_FEATURE.md) |
 | Running the tests | [docs/testing/RUNNING_TESTS.md](docs/testing/RUNNING_TESTS.md) |
 | What the tests cover | [docs/testing/FUNCTIONAL_TESTS.md](docs/testing/FUNCTIONAL_TESTS.md) |
