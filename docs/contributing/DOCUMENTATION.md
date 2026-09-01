@@ -67,9 +67,9 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 | `app/services/llm_service.py` | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) |
 | `app/core/**` — auth, deps, exceptions | [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md), [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md), [../api/ERRORS.md](../api/ERRORS.md) |
 | `app/database.py` — engine, pool, SQLite pragmas, `get_db` | [../design/DATABASE.md](../design/DATABASE.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
-| `app/config.py` — thresholds, pricing | [../business-rules/README.md](../business-rules/README.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
+| `app/config.py` — thresholds, pricing, settings | [../business-rules/README.md](../business-rules/README.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) |
 | `app/seed.py` — demo data | [../demo/SEED_DATA.md](../demo/SEED_DATA.md), [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) |
-| `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md) |
+| `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md), [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md) — § 3 describes what the startup hook does |
 | `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) |
 | Project layout or new module | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 | A function under `app/**` is added, removed, renamed or moved | [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — it walks the functions in order and cites their line numbers |

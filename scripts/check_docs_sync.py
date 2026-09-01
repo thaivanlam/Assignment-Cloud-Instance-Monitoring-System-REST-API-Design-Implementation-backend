@@ -55,9 +55,23 @@ MAPPING: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     ("app/database.py", ("docs/design/DATABASE.md", "docs/design/ARCHITECTURE.md")),
-    ("app/config.py", ("docs/business-rules/README.md", "docs/design/ARCHITECTURE.md")),
+    (
+        "app/config.py",
+        (
+            "docs/business-rules/README.md",
+            "docs/design/ARCHITECTURE.md",
+            "docs/operations/CONFIGURATION.md",
+        ),
+    ),
     ("app/seed.py", ("docs/demo/SEED_DATA.md", "docs/demo/ACCOUNTS.md")),
-    ("app/main.py", ("docs/design/ARCHITECTURE.md", "docs/api/ERRORS.md")),
+    (
+        "app/main.py",
+        (
+            "docs/design/ARCHITECTURE.md",
+            "docs/api/ERRORS.md",
+            "docs/operations/DEPLOYMENT.md",
+        ),
+    ),
     ("tests/", ("docs/testing/FUNCTIONAL_TESTS.md",)),
 )
 
