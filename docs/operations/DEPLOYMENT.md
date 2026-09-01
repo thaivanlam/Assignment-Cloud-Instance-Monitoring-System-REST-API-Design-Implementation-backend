@@ -130,7 +130,7 @@ the `source` field: `llm` means the provider answered, `rule-based` means it did
 [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md)).
 
 The figures every one of these responses should return are in
-[../demo/SEED_DATA.md](../demo/SEED_DATA.md), and the same values are asserted by the 104
+[../demo/SEED_DATA.md](../demo/SEED_DATA.md), and the same values are asserted by the 123
 tests ([../testing/RUNNING_TESTS.md](../testing/RUNNING_TESTS.md)).
 
 ---
@@ -239,7 +239,7 @@ out of the startup hook into a migration step.
 ```bash
 git pull
 .venv/bin/pip install -r requirements.txt   # only when requirements.txt changed
-pytest -q                                   # 104 passed — needs requirements-dev.txt
+pytest -q                                   # 123 passed — needs requirements-dev.txt
 sudo systemctl restart techvalley
 curl -s http://127.0.0.1:8000/              # then the rest of § 4
 ```

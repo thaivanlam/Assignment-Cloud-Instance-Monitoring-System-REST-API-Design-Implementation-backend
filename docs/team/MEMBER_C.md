@@ -7,9 +7,9 @@ This document covers the TechValley assignment scope owned by Member C.
 | Method | Endpoint | Behavior |
 |---|---|---|
 | `PATCH` | `/api/instances/{id}/status` | Update status and optional CPU usage |
-| `GET` | `/api/monitor/warnings` | Return RUNNING instances with CPU usage at or above 80% and create `CPU_HIGH` alerts |
-| `GET` | `/api/monitor/errors` | Return ERROR instances and create critical `ERROR_DETECTED` alerts |
-| `GET` | `/api/monitor/long-stopped` | Return instances that have been STOPPED for at least 48 hours and create `LONG_STOPPED` alerts |
+| `GET` | `/api/monitor/warnings` | Return RUNNING instances with CPU usage at or above 80% (one page at a time) and create `CPU_HIGH` alerts for all of them |
+| `GET` | `/api/monitor/errors` | Return ERROR instances (one page at a time) and create critical `ERROR_DETECTED` alerts for all of them |
+| `GET` | `/api/monitor/long-stopped` | Return instances that have been STOPPED for at least 48 hours (one page at a time) and create `LONG_STOPPED` alerts for all of them |
 | `GET` | `/api/monitor/report` | Return status counts, warning count, total monthly cost, and unresolved alerts |
 
 All endpoints require a JWT. ADMIN can see all clients. CLIENT_MANAGER results are restricted to clients assigned to the authenticated manager.
@@ -27,12 +27,15 @@ All endpoints require a JWT. ADMIN can see all clients. CLIENT_MANAGER results a
 
 Each monitoring scan checks for an unresolved alert with the same `instanceId` and `alertType` before inserting. Repeated scans therefore return the same matching instances without creating duplicate unresolved alerts. After an alert is resolved, a later scan may create a new alert if the condition still exists.
 
+A scan records an alert for **every** instance meeting its condition, not only those on the page it returns. The three endpoints are paginated, but the pagination bounds the response and never the detection — an instance on page eight raises its alert whether or not anyone asks for page eight. See [../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts).
+
 ### Full report
 
 - `instanceCountByStatus`: includes RUNNING, STOPPED, and ERROR keys even when a count is zero.
 - `warningCount`: number of RUNNING instances whose CPU usage is at least 80%.
 - `totalMonthlyCost`: sum of `monthlyCost` for all visible instances. The RUNNING-only restriction belongs to the next-month forecast API, not the current report.
-- `unresolvedAlerts`: unresolved alerts limited by the caller's client access.
+- `unresolvedAlertCount`: every unresolved alert within the caller's client access, counted in the database.
+- `unresolvedAlerts`: the 20 most recent of them, newest first. It is a preview, so on a busy system it is shorter than `unresolvedAlertCount`; the complete history is the paginated `GET /api/alerts`.
 
 ## Demo Flow
 

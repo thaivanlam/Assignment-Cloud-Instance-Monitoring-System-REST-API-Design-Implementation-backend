@@ -92,6 +92,12 @@ blindly:
 An operator seeing an unexpected `isViolation` can read `measuredHours` versus
 `runningHours` per instance and see exactly which one pulled the average down.
 
+`instanceDetails` is **not** paginated and lists every instance of the client. The
+average is taken across all of them, so a page would give a different — and wrong —
+`uptimePercent`; unlike the listing endpoint beside it
+([../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination)) the rows are an input to
+the answer, not just the answer's payload.
+
 ---
 
 ## 5. Related

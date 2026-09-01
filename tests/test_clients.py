@@ -39,7 +39,7 @@ def test_admin_registers_a_client(api, auth_headers):
 
     # The new client immediately falls inside its manager's scope.
     scoped = client.get("/api/clients", headers=auth_headers["manager1"])
-    assert 11 in [item["id"] for item in scoped.json()]
+    assert 11 in [item["id"] for item in scoped.json()["items"]]
 
 
 def test_client_registration_is_admin_only(api, auth_headers):
@@ -112,11 +112,12 @@ def test_client_list_is_scoped_by_role(api, auth_headers):
     manager1 = client.get("/api/clients", headers=auth_headers["manager1"])
     manager2 = client.get("/api/clients", headers=auth_headers["manager2"])
 
-    assert [item["id"] for item in admin.json()] == list(range(1, 11))
-    assert [item["id"] for item in manager1.json()] == [1, 2, 3, 4, 5]
-    assert [item["id"] for item in manager2.json()] == [6, 7, 8, 9, 10]
-    assert admin.json()[0]["clientName"] == "VinaSoft"
-    assert admin.json()[0]["contractPlan"] == "PREMIUM"
+    assert [item["id"] for item in admin.json()["items"]] == list(range(1, 11))
+    assert [item["id"] for item in manager1.json()["items"]] == [1, 2, 3, 4, 5]
+    assert [item["id"] for item in manager2.json()["items"]] == [6, 7, 8, 9, 10]
+    assert admin.json()["items"][0]["clientName"] == "VinaSoft"
+    assert admin.json()["items"][0]["contractPlan"] == "PREMIUM"
+    assert admin.json()["total"] == 10
 
 
 def test_client_instances_are_listed_for_the_owning_manager(api, auth_headers):
@@ -125,8 +126,59 @@ def test_client_instances_are_listed_for_the_owning_manager(api, auth_headers):
     response = client.get("/api/clients/1/instances", headers=auth_headers["manager1"])
 
     assert response.status_code == 200
-    assert [item["id"] for item in response.json()] == [1, 2, 3]
-    assert {item["clientId"] for item in response.json()} == {1}
+    assert [item["id"] for item in response.json()["items"]] == [1, 2, 3]
+    assert {item["clientId"] for item in response.json()["items"]} == {1}
+    assert response.json()["total"] == 3
+
+
+def test_client_list_is_paginated(api, auth_headers):
+    client, _ = api
+
+    first = client.get("/api/clients?page=1&size=4", headers=auth_headers["admin"])
+    last = client.get("/api/clients?page=3&size=4", headers=auth_headers["admin"])
+
+    assert [item["id"] for item in first.json()["items"]] == [1, 2, 3, 4]
+    assert [item["id"] for item in last.json()["items"]] == [9, 10]
+    assert first.json()["total"] == 10
+    assert first.json()["totalPages"] == 3
+
+
+def test_client_list_pagination_counts_only_the_callers_clients(api, auth_headers):
+    client, _ = api
+
+    response = client.get("/api/clients?size=2", headers=auth_headers["manager1"])
+
+    # `total` is the scoped count, so a manager is never told how many clients exist.
+    assert response.json()["total"] == 5
+    assert response.json()["totalPages"] == 3
+    assert [item["id"] for item in response.json()["items"]] == [1, 2]
+
+
+def test_client_instances_are_paginated(api, auth_headers):
+    client, _ = api
+
+    first = client.get("/api/clients/1/instances?size=2", headers=auth_headers["manager1"])
+    second = client.get(
+        "/api/clients/1/instances?page=2&size=2", headers=auth_headers["manager1"]
+    )
+
+    assert [item["id"] for item in first.json()["items"]] == [1, 2]
+    assert [item["id"] for item in second.json()["items"]] == [3]
+    assert first.json()["total"] == 3
+    assert first.json()["totalPages"] == 2
+
+
+def test_cost_and_sla_still_cover_every_instance_not_a_page(api, auth_headers):
+    client, _ = api
+
+    cost = client.get("/api/clients/1/cost", headers=auth_headers["manager1"])
+    sla = client.get("/api/clients/1/sla", headers=auth_headers["manager1"])
+
+    # These two embed a row per instance and are deliberately not paginated, so the
+    # page bound on /instances must not have leaked into them.
+    assert cost.json()["instanceCount"] == 3
+    assert len(cost.json()["costByInstance"]) == 3
+    assert len(sla.json()["instanceDetails"]) == 3
 
 
 @pytest.mark.parametrize(

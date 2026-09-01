@@ -6,8 +6,18 @@ Pagination, filtering, and sorting rules shared across the API.
 
 ## 1. Pagination
 
-Only `GET /api/instances` is paginated. Every other list endpoint returns a plain JSON
-array, because the seeded scale (10 clients, 15 instances) does not justify an envelope.
+**Every list endpoint is paginated.** All seven take the same `page`/`size` pair and
+answer with the same `PageResponse` envelope:
+
+| Endpoint | Items |
+|---|---|
+| `GET /api/instances` | `InstanceOut` |
+| `GET /api/alerts` | `AlertOut` |
+| `GET /api/clients` | `ClientOut` |
+| `GET /api/clients/{id}/instances` | `InstanceOut` |
+| `GET /api/monitor/warnings` | `InstanceOut` |
+| `GET /api/monitor/errors` | `InstanceOut` |
+| `GET /api/monitor/long-stopped` | `InstanceOut` |
 
 | Parameter | Type | Default | Bounds |
 |---|---|---|---|
@@ -26,10 +36,33 @@ Response envelope (`PageResponse`):
 }
 ```
 
-- `total` is the count **after** filters and role scoping, not the table row count.
+- `total` is the count **after** filters and role scoping, not the table row count. A
+  `CLIENT_MANAGER` is never told how many rows exist outside their scope.
 - `totalPages` is `ceil(total / size)`.
 - Requesting a page past the end returns `200` with an empty `items` array, not `404`.
-- `size` is capped at `100` by the query validator; a larger value returns `422`.
+- `size` is capped at `100` by the query validator; a larger value returns `422`, as does
+  `page=0` or `size=0`.
+
+The bounds, the envelope and the counting live in one place —
+[app/pagination.py](../../app/pagination.py) — so the cap cannot be `100` on one route
+and something else on the next.
+
+`GET /api/monitor/report` is the exception, and is not paginated. It is a single
+aggregate object rather than a list; the one list inside it, `unresolvedAlerts`, is
+capped at the **20 most recent** with the full history behind `GET /api/alerts`. Its
+`unresolvedAlertCount` remains the true total and can therefore exceed the length of the
+embedded array — see [ENDPOINTS.md](ENDPOINTS.md#get-apimonitorreport--aggregate-report).
+
+**Detection is not paginated, only its response.** The three `/api/monitor/*` scan
+endpoints record an alert for **every** instance meeting their condition, not merely the
+page they return. Paginating the recording would mean a dashboard reading page 1 silently
+stopped detecting anything past it — see
+[../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts).
+
+Only `GET /api/instances` was paginated originally; the other six returned every matching
+row, which made the response grow without bound on tables nothing prunes. Extending the
+convention is [../performance/PERFORMANCE_BUGS.md § PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07),
+and it is a **breaking** change to those six response shapes.
 
 ---
 
@@ -85,6 +118,17 @@ trade-off is that a typo produces default ordering instead of a loud failure —
 `sort` value if results look unordered.
 
 Sorting is applied before pagination, so page boundaries are stable across requests.
+**`id` is appended as a final tiebreaker** whenever the sort key is something else. Most
+sortable fields are not unique — `status` has three distinct values across the whole
+table — and rows tied on the sort key have no defined order between them, so without a
+unique last key a row could appear on two pages, or on none, as a caller walks them.
+
+`GET /api/alerts` sorts the same way for the same reason: `detectedAt` descending, then
+`id` descending. A scan stamps every alert it records with the same instant, so ties are
+the normal case there rather than the exception. The tiebreaker is free — SQLite already
+holds `ix_alerts_detectedAt` in `(detectedAt, rowid)` order, so the plan is unchanged and
+still needs no sort step
+([../performance/PERFORMANCE_BUGS.md § PERF-04](../performance/PERFORMANCE_BUGS.md#perf-04)).
 
 ---
 

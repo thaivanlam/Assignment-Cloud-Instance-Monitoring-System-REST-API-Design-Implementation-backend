@@ -7,29 +7,36 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Alert, AlertType, Instance, InstanceStatus
 from app.models.models import utcnow
+from app.pagination import DEFAULT_SIZE
 
-# The dedup probe reads every instance id of a scan in one statement. SQLite caps a
-# statement at 32766 bind parameters, so the ids go in batches — one query per batch
-# instead of one per instance, and never a statement that cannot be prepared.
+# A scan walks its instances in batches of this size. Two things set it: the dedup probe
+# reads a whole batch of ids in one statement and SQLite caps a statement at 32766 bind
+# parameters, and a scan must record an alert for every matching instance even though it
+# returns only one page of them — so it holds a batch in memory rather than the whole
+# result set, however large that grows.
 ID_BATCH_SIZE = 500
+
+# The report embeds only the most recent unresolved alerts; the full history is
+# GET /api/alerts.  See docs/performance/PERFORMANCE_BUGS.md § PERF-07.
+REPORT_ALERT_LIMIT = 20
 
 
 def _instances_with_unresolved_alert(
     db: Session, instance_ids: list[int], alert_type: AlertType
 ) -> set[int]:
-    """The subset of `instance_ids` that already carries an unresolved alert of this type."""
-    found: set[int] = set()
-    for start in range(0, len(instance_ids), ID_BATCH_SIZE):
-        batch = instance_ids[start : start + ID_BATCH_SIZE]
-        found.update(
-            row[0]
-            for row in db.query(Alert.instanceId).filter(
-                Alert.instanceId.in_(batch),
-                Alert.alertType == alert_type,
-                Alert.isResolved.is_(False),
-            )
+    """The subset of `instance_ids` that already carries an unresolved alert of this type.
+
+    `instance_ids` is one scan batch, so this is a single statement whose bind-parameter
+    count is bounded by `ID_BATCH_SIZE`.
+    """
+    return {
+        row[0]
+        for row in db.query(Alert.instanceId).filter(
+            Alert.instanceId.in_(instance_ids),
+            Alert.alertType == alert_type,
+            Alert.isResolved.is_(False),
         )
-    return found
+    }
 
 
 def _record_alerts(
@@ -42,9 +49,13 @@ def _record_alerts(
 
     The dedup rule is unchanged (docs/business-rules/ALERTING.md § 3) — an instance with
     an open alert of the same type is still skipped. What changed is the number of
-    statements: the whole scan is checked in one query rather than one per instance, and
-    the new alerts are inserted as a batch. See docs/performance/PERFORMANCE_BUGS.md
-    § PERF-05.
+    statements: a whole batch is checked in one query rather than one instance at a
+    time, and the new alerts are inserted together. See
+    docs/performance/PERFORMANCE_BUGS.md § PERF-05.
+
+    `instances` is one scan batch of at most `ID_BATCH_SIZE`; `_scan` calls this once per
+    batch, so a scan of any size costs two statements per batch rather than two per
+    instance.
 
     Returns True if at least one new alert was created.
     """
@@ -67,6 +78,57 @@ def _record_alerts(
     return True
 
 
+def _scan(
+    db: Session,
+    query,
+    alert_type: AlertType,
+    message: Callable[[Instance], str],
+    page: int,
+    size: int,
+) -> tuple[list[Instance], int, int]:
+    """Run one detection scan: record alerts for every match, return one page of them.
+
+    Detection and the response are deliberately not the same set. The endpoint records a
+    `CPU_HIGH` for the 700th high-CPU instance just as it does for the first, because the
+    alert is the point of the scan (docs/business-rules/ALERTING.md § 2) — paginating the
+    *recording* would silently stop detecting past page one. Only the response is
+    paginated (docs/performance/PERFORMANCE_BUGS.md § PERF-07).
+
+    That is why this walks the matches itself instead of calling `paginate`: one pass
+    over the result, in id-keyset batches, both records the alerts and picks out the
+    requested window, so `total` and the page fall out of the walk with no extra count
+    or offset query. At most `ID_BATCH_SIZE` instances plus one page are held at a time,
+    so a scan that matches the whole table no longer materialises the whole table.
+    """
+    window = range((page - 1) * size, (page - 1) * size + size)
+    items: list[Instance] = []
+    total = 0
+    recorded = False
+    last_id = 0
+
+    while True:
+        batch = (
+            query.filter(Instance.id > last_id)
+            .order_by(Instance.id)
+            .limit(ID_BATCH_SIZE)
+            .all()
+        )
+        if not batch:
+            break
+        recorded |= _record_alerts(db, batch, alert_type, message)
+        for instance in batch:
+            if total in window:
+                items.append(instance)
+            total += 1
+        last_id = batch[-1].id
+        if len(batch) < ID_BATCH_SIZE:
+            break
+
+    _commit_if_recorded(db, recorded)
+    total_pages = (total + size - 1) // size
+    return items, total, total_pages
+
+
 def _commit_if_recorded(db: Session, recorded: bool) -> None:
     """Commits a scan only when it actually opened a new alert.
 
@@ -78,48 +140,51 @@ def _commit_if_recorded(db: Session, recorded: bool) -> None:
         db.commit()
 
 
-def check_warnings(db: Session, client_ids: list[int] | None) -> list[Instance]:
+def check_warnings(
+    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+) -> tuple[list[Instance], int, int]:
     """CPU >= 80% instances; auto-records a CPU_HIGH alert for each (skip if
-    an unresolved CPU_HIGH alert already exists)."""
+    an unresolved CPU_HIGH alert already exists). Returns one page of the matches."""
     query = db.query(Instance).filter(
         Instance.cpuUsage >= settings.CPU_WARNING_THRESHOLD,
         Instance.status == InstanceStatus.RUNNING,
     )
     if client_ids is not None:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
-    instances = query.order_by(Instance.id).all()
 
-    recorded = _record_alerts(
-        db, instances, AlertType.CPU_HIGH,
+    return _scan(
+        db, query, AlertType.CPU_HIGH,
         lambda inst: (
             f"CPU usage {inst.cpuUsage:.1f}% >= {settings.CPU_WARNING_THRESHOLD:.0f}% "
             f"on instance '{inst.instanceName}' ({inst.region})"
         ),
+        page, size,
     )
-    _commit_if_recorded(db, recorded)
-    return instances
 
 
-def check_errors(db: Session, client_ids: list[int] | None) -> list[Instance]:
-    """ERROR status instances; auto-records a critical ERROR_DETECTED alert."""
+def check_errors(
+    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+) -> tuple[list[Instance], int, int]:
+    """ERROR status instances; auto-records a critical ERROR_DETECTED alert.
+    Returns one page of the matches."""
     query = db.query(Instance).filter(Instance.status == InstanceStatus.ERROR)
     if client_ids is not None:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
-    instances = query.order_by(Instance.id).all()
 
-    recorded = _record_alerts(
-        db, instances, AlertType.ERROR_DETECTED,
+    return _scan(
+        db, query, AlertType.ERROR_DETECTED,
         lambda inst: (
             f"[CRITICAL] Instance '{inst.instanceName}' ({inst.region}) is in ERROR state"
         ),
+        page, size,
     )
-    _commit_if_recorded(db, recorded)
-    return instances
 
 
-def check_long_stopped(db: Session, client_ids: list[int] | None) -> list[Instance]:
+def check_long_stopped(
+    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+) -> tuple[list[Instance], int, int]:
     """Instances STOPPED for 48+ hours (based on last status update time).
-    Also records a LONG_STOPPED alert for visibility."""
+    Also records a LONG_STOPPED alert for visibility. Returns one page of the matches."""
     now = utcnow()
     threshold = now - timedelta(hours=settings.LONG_STOPPED_HOURS)
     query = db.query(Instance).filter(
@@ -128,7 +193,6 @@ def check_long_stopped(db: Session, client_ids: list[int] | None) -> list[Instan
     )
     if client_ids is not None:
         query = query.filter(Instance.clientId.in_(client_ids or [-1]))
-    instances = query.order_by(Instance.id).all()
 
     def stopped_message(inst: Instance) -> str:
         hours = (now - inst.updatedAt).total_seconds() / 3600
@@ -137,9 +201,7 @@ def check_long_stopped(db: Session, client_ids: list[int] | None) -> list[Instan
             f"(>= {settings.LONG_STOPPED_HOURS}h)"
         )
 
-    recorded = _record_alerts(db, instances, AlertType.LONG_STOPPED, stopped_message)
-    _commit_if_recorded(db, recorded)
-    return instances
+    return _scan(db, query, AlertType.LONG_STOPPED, stopped_message, page, size)
 
 
 def build_report(db: Session, client_ids: list[int] | None) -> dict:
@@ -168,13 +230,26 @@ def build_report(db: Session, client_ids: list[int] | None) -> dict:
         .scalar()
     )
 
-    unresolved = alert_query.filter(Alert.isResolved.is_(False)).order_by(Alert.detectedAt.desc()).all()
+    # The count comes from the database and the list is capped. Taking the count as
+    # `len(unresolved)` meant loading and serialising every unresolved alert a caller
+    # could see just to report a number, on the fastest-growing table in the schema —
+    # docs/performance/PERFORMANCE_BUGS.md § PERF-07. `unresolvedAlertCount` is still
+    # the true total, so it can exceed the length of the embedded preview.
+    unresolved_query = alert_query.filter(Alert.isResolved.is_(False))
+    unresolved_count = (
+        unresolved_query.with_entities(func.count(Alert.id)).scalar() or 0
+    )
+    unresolved = (
+        unresolved_query.order_by(Alert.detectedAt.desc(), Alert.id.desc())
+        .limit(REPORT_ALERT_LIMIT)
+        .all()
+    )
 
     return {
         "generatedAt": utcnow(),
         "instanceCountByStatus": status_counts,
         "warningCount": warning_count,
         "totalMonthlyCost": round(float(total_cost), 2),
-        "unresolvedAlertCount": len(unresolved),
+        "unresolvedAlertCount": unresolved_count,
         "unresolvedAlerts": unresolved,
     }

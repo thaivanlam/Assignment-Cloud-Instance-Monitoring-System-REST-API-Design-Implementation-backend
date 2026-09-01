@@ -55,6 +55,24 @@ Each scan is scoped to the caller's accessible clients, so a `CLIENT_MANAGER` ru
 scan only ever generates alerts for their own clients' instances
 ([AUTHORIZATION.md](AUTHORIZATION.md)).
 
+**A scan detects over every match; it returns one page of them.** The three endpoints are
+paginated ([../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination)), and the page
+bounds the *response* only. `GET /api/monitor/warnings?size=10` against 700 high-CPU
+instances still opens 700 `CPU_HIGH` alerts; it just answers with ten of the instances and
+a `total` of 700.
+
+This asymmetry is deliberate and load-bearing. Recording only what the page returns would
+make detection depend on how a dashboard happened to page through the results — an
+instance on page 8 would never raise an alert unless somebody scrolled that far, and the
+alert, not the response, is the point of the scan. The scan therefore walks the whole
+matching set in id batches of `ID_BATCH_SIZE`, recording as it goes, and keeps only the
+requested window
+([monitor_service.py](../../app/services/monitor_service.py), `_scan`). The batching
+bounds what a scan holds in memory without bounding what it detects; it is invisible
+through the API, and
+[tests/test_member_c.py](../../tests/test_member_c.py) pins that by driving the same scans
+at several batch sizes and asserting identical instances and identical alert counts.
+
 ---
 
 ## 3. Duplicate prevention
@@ -106,8 +124,15 @@ incident happened.
 ## 5. Alert history
 
 `GET /api/alerts` returns alerts for the caller's accessible clients, filterable by
-`alertType`, `isResolved`, and a `detectedAt` date range
+`alertType`, `isResolved`, and a `detectedAt` date range, one page at a time
 ([../api/CONVENTIONS.md](../api/CONVENTIONS.md)).
+
+`alerts` is the fastest-growing table in the schema — the scans above append to it and
+nothing prunes it — so the history is the one listing that had to be bounded first
+([../performance/PERFORMANCE_BUGS.md § PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07)).
+Ordering is `detectedAt` descending with `id` descending as the tiebreaker: a scan stamps
+every alert it records with the same instant, so ties are the normal case, and without a
+unique last key an alert could land on two pages or on none as a caller walks them.
 
 Alerts are deleted along with their instance
 ([INSTANCE_LIFECYCLE.md](INSTANCE_LIFECYCLE.md)), so history does not survive instance
@@ -124,7 +149,16 @@ deletion.
 | `instanceCountByStatus` | Zero-filled for all three statuses, so a client consuming it never has to handle a missing key |
 | `warningCount` | Same condition as `CPU_HIGH` detection — `RUNNING` and `cpuUsage ≥ 80` |
 | `totalMonthlyCost` | Sum over **all** visible instances, any status — see [COST.md](COST.md) |
-| `unresolvedAlertCount` / `unresolvedAlerts` | Unresolved alerts only, newest `detectedAt` first |
+| `unresolvedAlertCount` | Every unresolved alert in scope, counted in SQL |
+| `unresolvedAlerts` | The **20 most recent** of them, newest `detectedAt` first |
+
+The count and the array no longer answer the same question. `unresolvedAlertCount` is the
+true total and can exceed the length of `unresolvedAlerts`, which is a preview capped at
+`REPORT_ALERT_LIMIT`. The report is a dashboard summary; the full history is
+`GET /api/alerts`, which paginates. Previously the report built the whole unresolved list
+in order to take its length, so a system with thousands of open alerts serialised every
+one of them into a response whose only unbounded field nobody read to the end
+([../performance/PERFORMANCE_BUGS.md § PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07)).
 
 ---
 
@@ -132,7 +166,9 @@ deletion.
 
 [tests/test_member_c.py](../../tests/test_member_c.py) covers warning/error/long-stopped
 detection, alert auto-recording, duplicate prevention across repeated scans, and the
-report contents.
+report contents. It also pins the two rules this page states about pagination: that a
+scan returning one instance per page still records an alert for all four matches, and
+that the report's `unresolvedAlertCount` keeps counting past the 20 it embeds.
 
 ---
 
@@ -141,7 +177,7 @@ report contents.
 | Document | Why |
 |---|---|
 | [INSTANCE_LIFECYCLE.md](INSTANCE_LIFECYCLE.md) | Why `updatedAt` is trustworthy |
-| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Why a scan that records nothing does not commit, and why it dedups in one query |
+| [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | Why a scan that records nothing does not commit, why it dedups in one query, and why it pages its response but not its detection |
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | Monitoring and alert endpoint shapes |
 | [../team/MEMBER_C.md](../team/MEMBER_C.md) | Assignment scope for monitoring |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Demonstrating dedup by scanning twice |

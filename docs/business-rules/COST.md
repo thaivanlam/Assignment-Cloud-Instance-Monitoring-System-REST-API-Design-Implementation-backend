@@ -64,6 +64,15 @@ operator decide what to decommission.
 
 `totalMonthlyCost` is rounded to 2 decimals.
 
+**This endpoint is not paginated**, and `costByInstance` covers every instance of the
+client rather than a page of them. `GET /api/clients/{id}/instances` beside it *is*
+paginated ([../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination)), and the
+difference is deliberate: a total that summed one page would be wrong, so the rows have
+to be loaded regardless and there is nothing to save by bounding the array they produce.
+Both read the same query, `_client_instances_query` in
+[client_service.py](../../app/services/client_service.py); only the listing endpoint
+takes a page from it.
+
 ---
 
 ## 4. Next-month forecast — `GET /api/clients/{id}/cost-forecast`

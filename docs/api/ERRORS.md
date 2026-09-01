@@ -107,12 +107,13 @@ date in `dateFrom` / `dateTo`.
 | `PATCH /api/instances/{id}/status` | `401` · `403` · `404` · `422` `cpuUsage` out of range |
 | `DELETE /api/instances/{id}` | `401` · `403` · `404` · **`409` instance is RUNNING** |
 | `GET /api/instances/{id}/diagnosis` | `401` · `403` · `404` |
-| `GET /api/monitor/*` | `401` |
-| `GET /api/alerts` | `401` · `422` bad enum or date |
+| `GET /api/monitor/warnings` · `/errors` · `/long-stopped` | `401` · `422` bad `page`/`size` |
+| `GET /api/monitor/report` | `401` |
+| `GET /api/alerts` | `401` · `422` bad `page`/`size`/enum or date |
 | `PATCH /api/alerts/{id}/resolve` | `401` · `403` · `404` |
 | `POST /api/clients` | `401` · `403` non-ADMIN · `404` unknown `managerId` · `400` `managerId` is not a CLIENT_MANAGER · `422` |
-| `GET /api/clients` | `401` |
-| `GET /api/clients/{id}/*` | `401` · `403` · `404` |
+| `GET /api/clients` | `401` · `422` bad `page`/`size` |
+| `GET /api/clients/{id}/*` | `401` · `403` · `404` · `422` bad `page`/`size` on `/instances` |
 
 Note that `403` is returned — not `404` — when a `CLIENT_MANAGER` requests another
 manager's resource. The resource is confirmed to exist. That is an accepted trade-off

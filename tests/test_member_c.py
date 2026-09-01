@@ -1,4 +1,8 @@
+import pytest
+from sqlalchemy import insert
+
 from app.models import Alert, AlertType, Instance
+from app.services import monitor_service
 
 
 def _alert_count(db, alert_type: AlertType) -> int:
@@ -68,7 +72,7 @@ def test_warnings_are_scoped_auto_recorded_and_deduplicated(api, auth_headers):
 
     manager1 = client.get("/api/monitor/warnings", headers=auth_headers["manager1"])
     assert manager1.status_code == 200
-    assert [item["id"] for item in manager1.json()] == [1, 4]
+    assert [item["id"] for item in manager1.json()["items"]] == [1, 4]
     assert _alert_count(db, AlertType.CPU_HIGH) == 2
 
     repeated = client.get("/api/monitor/warnings", headers=auth_headers["manager1"])
@@ -77,7 +81,7 @@ def test_warnings_are_scoped_auto_recorded_and_deduplicated(api, auth_headers):
 
     manager2 = client.get("/api/monitor/warnings", headers=auth_headers["manager2"])
     assert manager2.status_code == 200
-    assert [item["id"] for item in manager2.json()] == [11, 14]
+    assert [item["id"] for item in manager2.json()["items"]] == [11, 14]
     assert _alert_count(db, AlertType.CPU_HIGH) == 4
 
     first_alert = (
@@ -106,9 +110,9 @@ def test_error_and_long_stopped_monitoring_auto_record_without_duplicates(api, a
     long_stopped = client.get("/api/monitor/long-stopped", headers=auth_headers["admin"])
 
     assert errors.status_code == 200
-    assert [item["id"] for item in errors.json()] == [5, 9]
+    assert [item["id"] for item in errors.json()["items"]] == [5, 9]
     assert long_stopped.status_code == 200
-    assert [item["id"] for item in long_stopped.json()] == [3, 7, 13]
+    assert [item["id"] for item in long_stopped.json()["items"]] == [3, 7, 13]
     assert _alert_count(db, AlertType.ERROR_DETECTED) == 2
     assert _alert_count(db, AlertType.LONG_STOPPED) == 3
 
@@ -154,3 +158,86 @@ def test_full_report_and_manager_scope(api, auth_headers):
         7,
         9,
     }
+
+
+# ------------------------------------------------------------------------ pagination
+
+
+def test_a_scan_records_alerts_for_every_match_not_only_the_page(api, auth_headers):
+    client, db = api
+
+    # One instance per page, four matching instances: detection must still cover all
+    # four. Paginating the recording rather than the response would silently stop
+    # detecting past page one — docs/business-rules/ALERTING.md § 2.
+    response = client.get("/api/monitor/warnings?size=1", headers=auth_headers["admin"])
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [1]
+    assert response.json()["total"] == 4
+    assert response.json()["totalPages"] == 4
+    assert _alert_count(db, AlertType.CPU_HIGH) == 4
+
+
+def test_monitoring_pages_partition_the_matches(api, auth_headers):
+    client, _ = api
+
+    walked = []
+    for page in (1, 2, 3):
+        response = client.get(
+            f"/api/monitor/warnings?page={page}&size=2", headers=auth_headers["admin"]
+        )
+        walked.extend(item["id"] for item in response.json()["items"])
+
+    assert walked == [1, 4, 11, 14]
+
+
+def test_monitoring_scans_are_unchanged_by_the_batch_size(api, auth_headers, monkeypatch):
+    """A scan walks its matches in id batches; the batch size must not be observable."""
+    client, db = api
+
+    monkeypatch.setattr(monitor_service, "ID_BATCH_SIZE", 1)
+    first = client.get("/api/monitor/warnings", headers=auth_headers["admin"])
+    assert [item["id"] for item in first.json()["items"]] == [1, 4, 11, 14]
+    assert first.json()["total"] == 4
+    assert _alert_count(db, AlertType.CPU_HIGH) == 4
+
+    # A repeat scan at a different batch size still dedups against all four.
+    monkeypatch.setattr(monitor_service, "ID_BATCH_SIZE", 3)
+    repeat = client.get("/api/monitor/warnings", headers=auth_headers["admin"])
+    assert [item["id"] for item in repeat.json()["items"]] == [1, 4, 11, 14]
+    assert _alert_count(db, AlertType.CPU_HIGH) == 4
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/monitor/warnings", "/api/monitor/errors", "/api/monitor/long-stopped"]
+)
+def test_monitoring_rejects_out_of_range_paging(api, auth_headers, path):
+    client, _ = api
+
+    response = client.get(f"{path}?size=101", headers=auth_headers["admin"])
+
+    assert response.status_code == 422
+
+
+def test_report_caps_the_embedded_alerts_but_not_the_count(api, auth_headers):
+    client, db = api
+    for path in ("/api/monitor/warnings", "/api/monitor/errors", "/api/monitor/long-stopped"):
+        client.get(path, headers=auth_headers["admin"])
+
+    # Nine real alerts plus enough synthetic ones to pass the embed cap.
+    db.execute(
+        insert(Alert),
+        [
+            {"instanceId": 1, "alertType": AlertType.CPU_HIGH, "message": f"filler {n}"}
+            for n in range(20)
+        ],
+    )
+    db.commit()
+
+    report = client.get("/api/monitor/report", headers=auth_headers["admin"]).json()
+
+    assert report["unresolvedAlertCount"] == 29
+    assert len(report["unresolvedAlerts"]) == monitor_service.REPORT_ALERT_LIMIT
+    # The preview is the newest end of the history, not an arbitrary slice.
+    detected = [alert["detectedAt"] for alert in report["unresolvedAlerts"]]
+    assert detected == sorted(detected, reverse=True)

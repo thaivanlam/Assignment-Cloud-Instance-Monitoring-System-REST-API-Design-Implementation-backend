@@ -1,13 +1,14 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Five — [PERF-01](#perf-01),
-[PERF-02](#perf-02), [PERF-03](#perf-03), [PERF-04](#perf-04) and [PERF-05](#perf-05) —
-have since been fixed; the **Status** column below says which are still open.
+findings, ranked by the load at which they start to hurt. Eight — [PERF-01](#perf-01)
+through [PERF-08](#perf-08) — have since been fixed; the **Status** column below says
+which are still open.
 
-Nothing here is a functional bug — every one of the 104 tests passes, and the API returns
+Nothing here is a functional bug — every one of the tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
-returning them *at all* under concurrency.
+returning them *at all* under concurrency. (The suite has grown from 104 cases to 123
+across these fixes; each finding below quotes the count at the time it landed.)
 
 **Every number below was measured**, not estimated. The method is in
 [§ How these were measured](#how-these-were-measured) so any of them can be reproduced or
@@ -24,9 +25,9 @@ challenged.
 | [PERF-03](#perf-03) | LLM diagnosis can hold a worker and a connection for ~30 minutes | `services/llm_service.py` | Critical | **Fixed** |
 | [PERF-04](#perf-04) | No index on any foreign key or filter column | `models/models.py` | High | **Fixed** |
 | [PERF-05](#perf-05) | Alert dedup runs one SELECT per instance (N+1) | `services/monitor_service.py` | High | **Fixed** |
-| [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | Open |
-| [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | Open |
-| [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | Open |
+| [PERF-06](#perf-06) | `commit()` expires the result set, forcing a re-SELECT per row | `database.py` | High | **Fixed** |
+| [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | **Fixed** |
+| [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | **Fixed** |
 | [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | Open |
 | [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | Open |
 | [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | Open |
@@ -83,7 +84,7 @@ not.
    flag.)
 
 2. **WAL and a relaxed sync mode**, set on every SQLite connection by `_set_sqlite_pragmas`
-   ([database.py:16](../../app/database.py#L16)):
+   ([database.py:52](../../app/database.py#L52)):
 
    ```
    journal_mode = wal
@@ -116,9 +117,12 @@ followed by ten repeat polls of each endpoint:
 The first scan still commits — it has real alerts to write. Every poll after it is a pure
 read. All 104 functional tests pass unchanged.
 
-What this does **not** fix: the commit that does happen still expires the result set
-([PERF-06](#perf-06)). The per-instance dedup `SELECT` this left in place has since been
-batched ([PERF-05](#perf-05)).
+What this did **not** fix at the time: the commit that does happen still expired the
+result set ([PERF-06](#perf-06)), and the per-instance dedup `SELECT` it left in place was
+still one statement per instance ([PERF-05](#perf-05)). Both have since been fixed. One
+side effect of this fix is worth naming, because it changed what PERF-06 costs: a repeat
+poll no longer commits, so it no longer expires anything either — after this landed, the
+post-commit refreshes were confined to the scans that actually record an alert.
 
 ---
 
@@ -390,9 +394,9 @@ where there is no `clientId` filter to lead with:
 
 Indexing also does nothing about the *number* of queries. It made the dedup probe a seek
 rather than a scan, but left it one statement per instance — that is [PERF-05](#perf-05),
-fixed separately and since. The count query still sorts in order to count
-([PERF-08](#perf-08)), and `list_alerts` still joins `instances` when nothing needs the
-join ([PERF-09](#perf-09)).
+fixed separately and since. The count query still sorted in order to count
+([PERF-08](#perf-08), fixed since), and `list_alerts` still joins `instances` when nothing
+needs the join ([PERF-09](#perf-09), still open).
 
 ---
 
@@ -414,7 +418,7 @@ queries** for a response of 4 rows:
 1 × SELECT instances          (the actual work)
 4 × SELECT alerts             <- dedup probe, one per matching instance
 4 × INSERT INTO alerts        <- one statement per alert
-4 × SELECT instances          <- see PERF-06
+4 × SELECT instances          <- see PERF-06, fixed since
 ```
 
 Two of those groups scale with the result size. At 500 warning instances this is 500
@@ -474,13 +478,15 @@ The `ADMIN` warnings scan, statement for statement, is now:
 1 × SELECT instances          (the actual work)
 1 × SELECT alerts             <- dedup probe, one for the whole scan
 1 × INSERT INTO alerts        <- one executemany, 4 rows
-4 × SELECT instances          <- see PERF-06
+4 × SELECT instances          <- see PERF-06, fixed since — the scan is 4 statements now
 ```
 
 The two groups that scaled with the result set are now fixed at one statement each. At
 500 warning instances the scan issues 3 statements plus the [PERF-06](#perf-06) refreshes
 instead of 1,002 — and the repeat poll, which is the case a dashboard actually generates,
-is 3 statements no matter how many instances match.
+is 3 statements no matter how many instances match. (Those refreshes are gone too since
+PERF-06 was fixed, which is why the "statements after" column above reads 4 rather than 8
+on the current code.)
 
 All 104 functional tests pass unchanged, including the dedup coverage in
 [tests/test_member_c.py](../../tests/test_member_c.py): repeat scans that must not
@@ -488,45 +494,120 @@ duplicate, and the resolve-then-rescan that must open a fresh alert for one inst
 while leaving the others deduplicated — the partial case that a batched probe has to get
 right.
 
-What this does **not** fix: the trailing per-row refresh is [PERF-06](#perf-06), which is
-now the only group in that trace that still scales with the result set, and the endpoints
-remain unbounded in what they return ([PERF-07](#perf-07)).
+What this did **not** fix: the trailing per-row refresh, which was left as the only group
+in that trace still scaling with the result set — that is [PERF-06](#perf-06), fixed since.
+The endpoints remain unbounded in what they return ([PERF-07](#perf-07)).
 
 ---
 
 ### PERF-06
 
 **`commit()` expires the result set, so serialization re-SELECTs every row.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-5) at the end of this finding.
 
-`SessionLocal` is built without `expire_on_commit=False`
-([database.py:10](../../app/database.py#L10)), so `db.commit()` marks every loaded object
+`SessionLocal` was built without `expire_on_commit=False`
+([database.py](../../app/database.py)), so `db.commit()` marked every loaded object
 expired. The monitoring endpoints commit and then **return** the instances they just
-loaded — and Pydantic reading `instance.instanceName` for the response triggers a refresh
+loaded — and Pydantic reading `instance.instanceName` for the response triggered a refresh
 `SELECT` for each one.
 
 This is the trailing `4 × SELECT instances` in the [PERF-05](#perf-05) trace — the one
 group there that batching did not remove.
 
-It happens even when nothing was written. Measured, `CLIENT_MANAGER
-GET /api/monitor/warnings` after the alerts already exist — 7 queries, **0 inserts**:
-
-```
-1 × SELECT members     1 × SELECT clients     1 × SELECT instances
-2 × SELECT alerts      (dedup, both hit)
-2 × SELECT instances   <- pure waste: nothing changed, rows just got expired
-```
-
-One wasted round trip per row returned, on a code path that writes nothing.
+One wasted round trip per row returned, and the count grew with the result set: at 500
+warning instances, a scan paid 500 refreshes to serialize rows it had already loaded.
 
 **Fix.** `sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)`.
 Nothing in this codebase relies on post-commit expiry — `update_status` and `resolve_alert`
 already call `db.refresh()` explicitly where they want fresh state.
+
+#### The fix that landed
+
+The one-line fix, as proposed
+([database.py:44](../../app/database.py#L44)):
+
+```python
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, expire_on_commit=False, bind=engine
+)
+```
+
+`tests/conftest.py` builds its own session factory and got the same argument, so the suite
+exercises the session semantics the application runs on rather than SQLAlchemy's defaults.
+
+**Nothing depends on the expiry it removes**, which is what makes this safe rather than
+merely cheap. Four functions want state back from the database after their commit —
+`create_instance`, `update_status`, `create_client` and `resolve_alert` — and every one of
+them calls `db.refresh()` explicitly on the line after `db.commit()`. They were not relying
+on the implicit reload; they were paying for it twice over on the default, since the refresh
+they asked for made the expiry redundant. Measured, each of those endpoints issues exactly
+the same statements it did before. Sessions are per-request — `get_db` opens one and closes
+it after the response — so no unexpired value survives into another request.
+
+Measured with the same statement-logging harness as the rest of this document, on the same
+16-instance seed:
+
+| Request | Rows | Statements before | Statements after |
+|---|---|---|---|
+| `ADMIN /api/monitor/warnings`, first scan | 4 | 8 | **4** |
+| `ADMIN /api/monitor/errors`, first scan | 2 | 6 | **4** |
+| `ADMIN /api/monitor/long-stopped`, first scan | 3 | 7 | **4** |
+| `CLIENT_MANAGER /api/monitor/warnings`, first scan | 2 | 7 | **5** |
+| `CLIENT_MANAGER /api/monitor/errors`, first scan | 2 | 7 | **5** |
+| `CLIENT_MANAGER /api/monitor/long-stopped`, first scan | 2 | 7 | **5** |
+
+The `ADMIN` warnings scan, statement for statement, is now:
+
+```
+1 × SELECT members            (auth)
+1 × SELECT instances          (the actual work)
+1 × SELECT alerts             <- dedup probe, one for the whole scan (PERF-05)
+1 × INSERT INTO alerts        <- one executemany, 4 rows (PERF-05)
+                              <- the 4 refreshes are gone
+```
+
+Four statements for a scan of any size. Together with [PERF-05](#perf-05) this closes the
+last group in that trace that scaled with the result set: at 500 warning instances the
+first scan now issues 4 statements rather than 1,502.
+
+**One correction to the finding above**, which was written before [PERF-01](#perf-01)
+landed. It claimed the waste "happens even when nothing was written", and quoted a
+`CLIENT_MANAGER` repeat poll costing 7 queries with 0 inserts. That is no longer the
+shape of a repeat poll: since PERF-01 a scan that records nothing does not commit, and
+without a commit there is no expiry to pay for. Re-measured on the current code, a repeat
+poll costs 3 statements as `ADMIN` and 4 as `CLIENT_MANAGER` — **with and without this
+fix**. The refreshes this fix removes were confined to the first scan, the one that
+actually writes. The finding was real and the fix is worth having; its blast radius was
+smaller than the original text says.
+
+The endpoints where the count is unchanged, measured rather than assumed:
+
+| Request | Statements before | after |
+|---|---|---|
+| `POST /api/instances` | 4 | 4 |
+| `PATCH /api/instances/1/status` | 5 | 5 |
+| `PATCH /api/alerts/1/resolve` | 6 | 6 |
+| `POST /api/clients` | 4 | 4 |
+| `ADMIN /api/monitor/report` | 5 | 5 |
+
+The four writes each end in an explicit `db.refresh()`, which is one `SELECT` either way.
+`build_report` never commits, so it never had anything to expire.
+
+All 104 functional tests pass unchanged — including the ones that read the session
+directly after a request (`db.get(Instance, 1) is None` after a delete, the `updatedAt`
+comparison across an idempotent update), which are the assertions a change to expiry
+semantics would break first.
+
+What this did **not** fix: the endpoints still returned every matching row
+([PERF-07](#perf-07)), so the *response* still grew without bound even though the
+statement count no longer did. That has since been fixed too.
 
 ---
 
 ### PERF-07
 
 **Six list endpoints have no pagination and no limit.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-6) at the end of this finding.
 
 | Endpoint | Bound |
 |---|---|
@@ -554,6 +635,175 @@ embedded list (e.g. the 20 most recent), with the full history behind `/api/aler
 > [../api/CONVENTIONS.md](../api/CONVENTIONS.md) and
 > [../api/ENDPOINTS.md](../api/ENDPOINTS.md) in the same commit.
 
+#### The fix that landed
+
+All of it, as proposed, plus two things the proposal did not anticipate.
+
+**1. One pagination convention, in one module.** The bounds, the `page`/`size` query
+pair and the counting moved into [app/pagination.py](../../app/pagination.py) and the
+seven list endpoints share them. `GET /api/instances` was rewired through the same helper
+rather than keeping its own copy, so `size` cannot end up capped at 100 on one route and
+something else on the next. All six endpoints in the table above now answer with
+`PageResponse[T]`, exactly as `GET /api/instances` always did.
+
+**2. `build_report` counts instead of measuring a list**
+([monitor_service.py](../../app/services/monitor_service.py), `build_report`).
+`unresolvedAlertCount` comes from `func.count()`, and `unresolvedAlerts` is capped at
+`REPORT_ALERT_LIMIT = 20`, newest first. The two fields no longer answer the same
+question — the count is the true total and can exceed the array — which is a documented
+behaviour change ([../api/ENDPOINTS.md](../api/ENDPOINTS.md)) rather than a silent one.
+
+**3. Detection stayed unpaginated; only its response was bounded.** This is the part the
+proposal did not raise, and it is the only place where the obvious implementation would
+have been a functional regression. The three `/api/monitor/*` endpoints record an alert
+for every instance meeting their condition
+([../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts)).
+Recording only the page would make detection depend on how far a dashboard happened to
+scroll — the instance on page 8 would never raise an alert. So `_scan`
+([monitor_service.py](../../app/services/monitor_service.py)) walks the **whole** matching
+set and keeps only the requested window.
+
+**4. It walks that set in id-keyset batches rather than loading it.** `_scan` pulls
+`WHERE id > :last ORDER BY id LIMIT 500` repeatedly, records each batch, counts it and
+copies out any rows falling inside the page. That bounds what a scan holds in memory —
+one batch plus one page — where before it held every matching instance at once; and
+because the count and the page fall out of a walk the scan was making anyway, the
+monitoring endpoints need no separate count query. `_instances_with_unresolved_alert` lost
+its own internal chunking loop in the process: it is handed one batch and is one statement.
+
+**5. A unique tiebreaker on every sort.** Pagination is only coherent if the ordering is
+total. `GET /api/alerts` sorts by `detectedAt`, and a scan stamps every alert it records
+with the same instant, so ties were the normal case rather than the exception; rows tied
+on the sort key have no defined order, and a row could be served on two pages or on none
+as a caller walked them. `id` is now the last sort key on both `/api/alerts` and
+`/api/instances` (where `status`, `region` and `instanceType` are all heavily tied). This
+costs nothing — see the plans below.
+
+**What did not change:** the dedup rule, the scan-writes-alerts behaviour, the scope
+filters, the sort whitelist, the cost and SLA endpoints (their arithmetic covers every
+instance of a client, so those rows are loaded regardless and `costByInstance` /
+`instanceDetails` stay complete).
+
+##### Measured — the response
+
+The point of the finding. Same `TestClient` harness as the rest of this document, seeded
+demo data grown with extra RUNNING high-CPU instances so the listings have something to
+bound, `ADMIN`, default page size:
+
+| Request | Rows in body before | after | Body bytes before | after |
+|---|---|---|---|---|
+| `/api/monitor/warnings` | 704 | **10** | 165,974 | **2,423** |
+| `/api/alerts` | 709 | **10** | 144,036 | **2,108** |
+| `/api/clients/1/instances` | 703 | **10** | 165,734 | **2,416** |
+| `/api/monitor/report` | 709 | **20** | 144,235 | **4,300** |
+
+Before, every one of those grows with the table. After, none of them does — at 3,000
+extra instances the same four bodies are 2,425 / 2,140 / 2,418 / 4,364 bytes, against
+712,790 / 621,557 / 712,550 / 621,760 before.
+
+##### Measured — the memory
+
+Peak allocation during the single request, `tracemalloc` started around it on a warm
+process, in KiB:
+
+| Extra instances | `/api/monitor/warnings` | `/api/alerts` | `/api/clients/1/instances` | `/api/monitor/report` |
+|---|---|---|---|---|
+| 700 — before | 2,167 | 2,220 | 2,321 | 2,084 |
+| 700 — after | 1,270 | **96** | **96** | **122** |
+| 1,500 — before | 4,655 | 4,696 | 4,620 | 4,445 |
+| 1,500 — after | 1,864 | **96** | **96** | **122** |
+| 3,000 — before | 10,138 | 9,024 | 9,376 | 9,036 |
+| 3,000 — after | 2,006 | **97** | **97** | **122** |
+
+The three query-backed listings are flat: a page is a page whatever the table holds.
+The warnings scan is *bounded* rather than flat, and settles around 2 MiB — that is
+`ID_BATCH_SIZE = 500` instances in flight, which is the price of recording an alert for
+every match. It stops growing; it does not become free.
+
+##### Measured — the statements
+
+Pagination costs a count query on the endpoints that gained one. On the 16-instance seed,
+where every result already fitted on one page, that is the whole effect:
+
+| Request | Role | Statements before | after |
+|---|---|---|---|
+| `/api/alerts` | `ADMIN` | 2 | 3 |
+| `/api/clients` | `ADMIN` | 2 | 3 |
+| `/api/clients/1/instances` | `ADMIN` | 3 | 4 |
+| `/api/monitor/report` | `ADMIN` | 5 | 6 |
+| `/api/instances` | `ADMIN` | 3 | 3 |
+| `/api/monitor/warnings`, first scan | `ADMIN` | 4 | 4 |
+| `/api/monitor/warnings`, repeat poll | `ADMIN` | 3 | 3 |
+
+The monitoring endpoints are unchanged at seed scale because the keyset walk replaces the
+single `SELECT` it used to issue rather than adding to it. At 704 matching instances they
+cost 7 statements against 5 — three per 500-instance batch instead of one `SELECT` plus a
+probe and an insert per batch. That is the trade this fix makes and it is worth stating
+plainly: **two extra statements per 500 instances, in exchange for a response and a
+working set that no longer grow at all.**
+
+##### Measured — the plans
+
+`EXPLAIN QUERY PLAN` on the seeded schema, for the two statements this fix introduced or
+changed:
+
+```
+GET /api/instances count, before          CO-ROUTINE anon_1
+                                          SEARCH instances USING INDEX ix_instances_clientId_status (clientId=?)
+                                          USE TEMP B-TREE FOR ORDER BY
+                                          SCAN anon_1
+
+GET /api/instances count, after           SEARCH instances USING COVERING INDEX ix_instances_clientId_status (clientId=?)
+```
+
+That second row is [PERF-08](#perf-08), closed as a side effect — see there.
+
+```
+GET /api/alerts order, before             SCAN alerts USING INDEX ix_alerts_detectedAt
+  (detectedAt only)                       SEARCH instances USING COVERING INDEX ix_instances_id
+
+GET /api/alerts order, after              SCAN alerts USING INDEX ix_alerts_detectedAt
+  (detectedAt, id tiebreaker)             SEARCH instances USING COVERING INDEX ix_instances_id
+```
+
+Identical, and still no `USE TEMP B-TREE FOR ORDER BY`. The tiebreaker is free because
+SQLite holds a non-unique index in `(key, rowid)` order already, so
+`ORDER BY detectedAt DESC, id DESC` is exactly a reverse scan of `ix_alerts_detectedAt` —
+the ordered scan [PERF-04](#perf-04) bought is not given back.
+
+The keyset batch inside a scan plans as
+`SEARCH instances USING INTEGER PRIMARY KEY (rowid>?)`, which is a bounded range seek —
+better than the `SCAN instances` [PERF-04](#perf-04) recorded for `check_warnings` and
+could not improve, since the `LIMIT` now lets SQLite stop early.
+
+##### Verification
+
+**123 functional tests pass** — the 104 that existed, of which 14 were updated for the new
+response shape, plus 19 new ones. The new cases pin the parts a reader would otherwise
+have to take on trust: that pages partition a listing with no gaps or repeats even when
+the sort key is heavily tied; that `total` counts the scoped, filtered set rather than the
+table; that a page past the end is an empty `200`; that `size=101` is a `422`; that a scan
+returning one instance per page still records alerts for all four matches; that the same
+scans give identical instances and identical alert counts at batch sizes 1 and 3 as at
+500; that the report's count keeps counting past the 20 alerts it embeds; and that the
+cost and SLA responses still cover every instance rather than a page.
+
+##### What this does not fix
+
+- **The breaking change is real.** Six endpoints that returned a JSON array now return an
+  envelope. Any existing client iterating the response has to read `.items`.
+- **`GET /api/alerts` still joins `instances` when nothing needs the join**
+  ([PERF-09](#perf-09)) — and now the count query inherits that join too, so for an
+  `ADMIN` the join is paid twice per request instead of once.
+- **`costByInstance` and `instanceDetails` remain unbounded.** They are the two remaining
+  response arrays that grow with a client's instance count. Bounding them would mean
+  changing what the numbers beside them mean, which is a product decision rather than a
+  performance one.
+- **`offset` is still `OFFSET`.** Deep paging re-walks the rows it skips, so page 500 of
+  a listing costs what pages 1–500 would. The keyset walk inside `_scan` avoids this for
+  the scans; the query-backed listings do not, and at this project's scale that is not
+  worth the API change a cursor would need.
+
 ---
 
 ## Medium
@@ -561,10 +811,12 @@ embedded list (e.g. the 20 most recent), with the full history behind `/api/aler
 ### PERF-08
 
 **The pagination count query carries every column and the `ORDER BY`.**
+**Fixed** — closed by [PERF-07](#perf-07); see [The fix that landed](#the-fix-that-landed-7)
+at the end of this finding.
 
 `total = query.count()` at
-[instance_service.py:72](../../app/services/instance_service.py#L72) wraps the fully built
-query — sort included. Measured SQL:
+[instance_service.py:72](../../app/services/instance_service.py#L72) wrapped the fully
+built query — sort included. Measured SQL:
 
 ```sql
 SELECT count(*) FROM (
@@ -586,6 +838,48 @@ request.
 total = query.order_by(None).with_entities(func.count(Instance.id)).scalar()
 ```
 
+#### The fix that landed
+
+Exactly the line above, but not as its own change: [PERF-07](#perf-07) moved counting into
+a shared `paginate()` helper ([app/pagination.py](../../app/pagination.py)) that six more
+endpoints were about to start using, and writing the naive `query.count()` into it would
+have spread this defect to all of them. The helper counts correctly, and
+`GET /api/instances` was rewired through it, so this finding closed as a consequence
+rather than on its own.
+
+Measured — the same statement, on the same seeded data, before and after:
+
+```sql
+-- before
+SELECT count(*) AS count_1 FROM (
+  SELECT instances.id, instances."instanceName", instances.region, instances."instanceType",
+         instances.status, instances."cpuUsage", instances."monthlyCost", instances."clientId",
+         instances."launchedAt", instances."updatedAt"
+  FROM instances WHERE instances."clientId" IN (?, ?, ?, ?, ?)
+  ORDER BY instances."cpuUsage" DESC
+) AS anon_1
+
+-- after
+SELECT count(instances.id) AS count_1
+FROM instances WHERE instances."clientId" IN (?, ?, ?, ?, ?)
+```
+
+and the plans, on `?sort=-cpuUsage` as a `CLIENT_MANAGER`:
+
+| | Plan |
+|---|---|
+| Before | `CO-ROUTINE anon_1` · `SEARCH instances USING INDEX ix_instances_clientId_status (clientId=?)` · `USE TEMP B-TREE FOR ORDER BY` · `SCAN anon_1` |
+| After | `SEARCH instances USING COVERING INDEX ix_instances_clientId_status (clientId=?)` |
+
+Four plan steps become one. The subquery and the temp B-tree are gone, and because the
+count now selects a single indexed column the seek is **covering** — it answers from the
+index without touching a row. The statement count per request is unchanged; what changed
+is what that one statement does.
+
+All 123 functional tests pass, including the sort and pagination coverage in
+[tests/test_instances.py](../../tests/test_instances.py) that pins `total` across filters,
+scoping and every offered sort key.
+
 ---
 
 ### PERF-09
@@ -599,6 +893,10 @@ plan: `SCAN alerts` + a per-row `SEARCH instances` + `USE TEMP B-TREE FOR ORDER 
 
 **Fix.** Move the join inside the `if client_ids is not None:` branch that already exists
 one line below it.
+
+Since [PERF-07](#perf-07) the endpoint also issues a count over the same query, so for an
+`ADMIN` the unnecessary join is now paid twice per request rather than once. That raises
+the value of this fix; it does not change its shape.
 
 ---
 
@@ -735,20 +1033,28 @@ Ordered by benefit per unit of risk, not by severity.
 | # | Change | Findings closed | Risk |
 |---|---|---|---|
 | 1 | Add the missing indexes | [PERF-04](#perf-04) | None — additive — **done** |
-| 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low |
+| 2 | `expire_on_commit=False` | [PERF-06](#perf-06) | Low — **done** |
 | 3 | WAL + `synchronous=NORMAL`; commit only when something changed | [PERF-01](#perf-01) | Low — **done** |
 | 4 | Explicit pool sizing | [PERF-02](#perf-02) | Low — **done** |
 | 5 | Timeout and retry cap on the Anthropic client, and the session released before the call | [PERF-03](#perf-03) | Low — **done** |
 | 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule — **done** |
-| 7 | Count without the sort; conditional join | [PERF-08](#perf-08), [PERF-09](#perf-09) | Low |
-| 8 | Scope filter as a subquery; drop the lazy loads | [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
-| 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract |
+| 7 | Count without the sort | [PERF-08](#perf-08) | Low — **done**, with step 9 |
+| 8 | Conditional join; scope filter as a subquery; drop the lazy loads | [PERF-09](#perf-09), [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
+| 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract — **done** |
 
 Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
 touched a rule documented in [../business-rules/ALERTING.md](../business-rules/ALERTING.md)
-and kept the dedup guarantee intact — same guard, fewer statements. Step 9 changes response shapes and needs
-[../api/CONVENTIONS.md](../api/CONVENTIONS.md) and
-[../api/ENDPOINTS.md](../api/ENDPOINTS.md) updated in the same commit.
+and kept the dedup guarantee intact — same guard, fewer statements. Step 9 changed six
+response shapes and landed with [../api/CONVENTIONS.md](../api/CONVENTIONS.md),
+[../api/ENDPOINTS.md](../api/ENDPOINTS.md) and
+[../business-rules/ALERTING.md](../business-rules/ALERTING.md) in the same commit; it took
+step 7 with it, because the shared counting helper it introduced had to count correctly
+before six more endpoints started calling it.
+
+The order above was written before any of this landed, and step 9 ran out of turn: it was
+taken last as planned, but its own prerequisite — one place for the `page`/`size`
+convention to live — made step 7 free, so the two closed together. What remains is
+step 8.
 
 ---
 
@@ -778,6 +1084,30 @@ the objects it inserted. The chunked `IN` list was checked by driving the scans,
 repeat polls and the resolve-then-rescan path with `ID_BATCH_SIZE` forced to 1, 2 and 3
 against the default 500: identical instances, identical alert counts, identical dedup
 outcome at every size.
+
+The before/after counts under [PERF-06](#perf-06) come from the same listener, run twice
+in one process over two session factories built on the same seed — one with
+`expire_on_commit=True`, the SQLAlchemy default and the schema as it was, one with it
+`False` — so both columns are measured rather than one being remembered. Each pair gets a
+fresh in-memory database, and each endpoint is driven twice: a first scan, which records
+alerts and therefore commits, and a repeat poll, which does not. That second call is what
+showed the finding's "even when nothing was written" paragraph to be stale since
+[PERF-01](#perf-01) — the repeat poll's count is identical under both settings. The
+unchanged rows in the second table there (`POST /api/instances`, the two `PATCH`es,
+`POST /api/clients`, the report) were measured the same way rather than reasoned about.
+
+The before/after numbers under [PERF-07](#perf-07) and [PERF-08](#perf-08) come from that
+same listener run against **two checkouts** rather than two factories in one process: the
+change alters response shapes, so a single process cannot host both. A `git worktree` of
+the parent commit and the working tree were driven by the same script, which reports
+whichever shape the checkout it is running in returns. The response-size and memory
+figures come from the same pair — `len(response.content)` for the body, and
+`tracemalloc.get_traced_memory()` started immediately around one already-warmed request
+for the peak, so what it reports is that request's own allocation and not the process
+baseline. The scale rows were produced by seeding the demo data and then bulk-inserting
+700, 1,500 or 3,000 additional RUNNING instances at 95% CPU against client 1, so that the
+same rows are matched by the warnings scan, carried by the alert history once scanned, and
+listed by that client's instances endpoint.
 
 **Query plans** — `EXPLAIN QUERY PLAN` on the statements that listener captured, run
 against the seeded schema. The before/after pairs under [PERF-04](#perf-04) come from two
@@ -819,13 +1149,17 @@ the stand-in for the network call at the same instant; one of them reads
 `engine.pool.checkedout()` there. Running it with and without the early `db.close()`
 is the before/after table under [PERF-03](#perf-03).
 
-Caveats worth stating: the counts come from the 16-instance seed, so absolute numbers are
-small — what matters is which of them **scale with the result set**
-([PERF-06](#perf-06), [PERF-07](#perf-07); [PERF-05](#perf-05) was one until it was
-batched). The query plans are
-SQLite's; a different backend would plan differently, and would choose its own indexes
-from the ones [PERF-04](#perf-04) declares. No HTTP load test was run: [PERF-02](#perf-02) was reproduced at the
-connection-pool level rather than through the API, and the 30-minute figure in
+Caveats worth stating: most counts come from the 16-instance seed, so absolute numbers are
+small — what matters is which of them **scale with the result set**. Nothing measured here
+still does. [PERF-05](#perf-05) and [PERF-06](#perf-06) made the statement count grow with
+the result, and [PERF-07](#perf-07) made the response and the working set grow with it;
+all three are fixed, and the grown-database rows under PERF-07 are there precisely because
+the seed is too small to show the difference. What remains unbounded by measurement rather
+than by fix is deep `OFFSET` paging and the two per-instance arrays in the cost and SLA
+responses, both recorded under [PERF-07](#perf-07). The query plans are SQLite's; a
+different backend would plan differently, and would choose its own indexes from the ones
+[PERF-04](#perf-04) declares. No HTTP load test was run: [PERF-02](#perf-02) was reproduced
+at the connection-pool level rather than through the API, and the 30-minute figure in
 [PERF-03](#perf-03) is derived from the SDK's configured limits rather than from an
 observed timeout — its connection-hold counts, however, come from real requests
 through the app.
@@ -840,8 +1174,8 @@ through the app.
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | The layering and session handling these findings sit in |
 | [../design/ERD.md](../design/ERD.md) | The schema that [PERF-04](#perf-04) adds indexes to |
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The diagnosis endpoint of [PERF-03](#perf-03) and [PERF-14](#perf-14) |
-| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule [PERF-05](#perf-05) must preserve |
-| [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention [PERF-07](#perf-07) would extend |
+| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule [PERF-05](#perf-05) must preserve, and why [PERF-07](#perf-07) pages a scan's response but not its detection |
+| [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention [PERF-07](#perf-07) extended to every list endpoint |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Why none of these are caught today |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Updating this document alongside a fix |
 | [../changelog/CHANGELOG.md](../changelog/CHANGELOG.md) | When each fix landed |

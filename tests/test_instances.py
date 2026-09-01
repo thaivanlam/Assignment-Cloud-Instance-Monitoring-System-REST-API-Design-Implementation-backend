@@ -192,6 +192,23 @@ def test_list_instances_sorts(api, auth_headers):
     assert _ids(unknown_field) == list(range(1, 16))
 
 
+def test_pages_partition_a_non_unique_sort_without_gaps_or_repeats(api, auth_headers):
+    client, _ = api
+
+    # `status` has three distinct values across 15 instances, so almost every row is
+    # tied with several others. Walking the pages must still visit each row once.
+    walked = []
+    for page in (1, 2, 3, 4):
+        response = client.get(
+            f"/api/instances?sort=status&page={page}&size=4", headers=auth_headers["admin"]
+        )
+        walked.extend(_ids(response))
+
+    assert sorted(walked) == list(range(1, 16))
+    everything = client.get("/api/instances?size=100&sort=status", headers=auth_headers["admin"])
+    assert walked == _ids(everything)
+
+
 @pytest.mark.parametrize(
     "query", ["page=0", "size=0", "size=101", "status=BOGUS", "instanceType=BOGUS"]
 )

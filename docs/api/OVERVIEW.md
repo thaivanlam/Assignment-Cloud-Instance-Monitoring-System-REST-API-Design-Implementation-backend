@@ -26,21 +26,27 @@ Detailed request/response shapes are in [ENDPOINTS.md](ENDPOINTS.md).
 | Instances | `PATCH` | `/api/instances/{id}/status` | Update status and optional CPU usage |
 | Instances | `DELETE` | `/api/instances/{id}` | Delete — blocked while RUNNING |
 | Instances | `GET` | `/api/instances/{id}/diagnosis` | LLM incident diagnosis |
-| Monitoring | `GET` | `/api/monitor/warnings` | CPU ≥ 80% instances (+ auto alerts) |
-| Monitoring | `GET` | `/api/monitor/errors` | ERROR instances (+ auto alerts) |
-| Monitoring | `GET` | `/api/monitor/long-stopped` | STOPPED ≥ 48h instances (+ auto alerts) |
+| Monitoring | `GET` | `/api/monitor/warnings` | CPU ≥ 80% instances, paginated (+ auto alerts) |
+| Monitoring | `GET` | `/api/monitor/errors` | ERROR instances, paginated (+ auto alerts) |
+| Monitoring | `GET` | `/api/monitor/long-stopped` | STOPPED ≥ 48h instances, paginated (+ auto alerts) |
 | Monitoring | `GET` | `/api/monitor/report` | Aggregate status report |
-| Alerts | `GET` | `/api/alerts` | Alert history with filters |
+| Alerts | `GET` | `/api/alerts` | Alert history, paginated, with filters |
 | Alerts | `PATCH` | `/api/alerts/{id}/resolve` | Mark an alert resolved |
 | Clients | `POST` | `/api/clients` | Register a client — ADMIN only |
-| Clients | `GET` | `/api/clients` | List clients visible to the caller |
-| Clients | `GET` | `/api/clients/{id}/instances` | Instances of one client |
+| Clients | `GET` | `/api/clients` | List clients visible to the caller, paginated |
+| Clients | `GET` | `/api/clients/{id}/instances` | Instances of one client, paginated |
 | Clients | `GET` | `/api/clients/{id}/cost` | Current-month cost total |
 | Clients | `GET` | `/api/clients/{id}/cost-forecast` | Next-month forecast |
 | Clients | `GET` | `/api/clients/{id}/sla` | SLA uptime and violation flag |
 
 Routers are registered in [app/main.py](../../app/main.py) and each lives in its own
 module under [app/controllers/](../../app/controllers/).
+
+**All seven list endpoints paginate.** They share one `page`/`size` pair and one
+`PageResponse` envelope, defined in [app/pagination.py](../../app/pagination.py) and
+documented in [CONVENTIONS.md § 1](CONVENTIONS.md#1-pagination). `GET /api/monitor/report`
+is the only `GET` returning a collection that does not, because it is an aggregate object
+rather than a list; the `unresolvedAlerts` inside it is capped at the 20 most recent.
 
 ---
 

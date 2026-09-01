@@ -62,7 +62,10 @@ curl http://127.0.0.1:8000/api/instances
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/clients
 ```
 
-All **10** clients.
+All **10** clients, inside a `PageResponse`: `items` holds them, `total` is `10`,
+`totalPages` is `1` at the default `size=10`. Every list endpoint answers in this
+envelope — `curl ".../api/clients?size=4"` splits the same ten across three pages
+([../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination)).
 
 ### 6. Register a client
 
@@ -134,11 +137,24 @@ This is the core demonstration. **Call each scan twice.**
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/api/monitor/warnings
 ```
 
-**4** instances — ids 1, 4, 11, 14. Instance 10 at 78.9% is correctly excluded.
+**4** instances — ids 1, 4, 11, 14 — in `items`, with `total: 4`. Instance 10 at 78.9%
+is correctly excluded.
 
 Call it again: the same 4 instances come back, and the unresolved `CPU_HIGH` count does
 **not** increase. The dedup guard skips insertion when an unresolved alert of the same
 type already exists.
+
+Worth demonstrating in the same breath, because it is the one thing about these endpoints
+that surprises people. Reset the database, then:
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8000/api/monitor/warnings?size=1"
+```
+
+One instance in `items`, `total: 4` — and **four** `CPU_HIGH` alerts recorded, which the
+next step's report confirms. Pagination bounds the response; detection still covers every
+match ([../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts)).
 
 ### 13. Errors
 
@@ -170,13 +186,20 @@ On a fresh database, before any status changes:
 9 = 4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED. `totalMonthlyCost` counts every
 instance, not only running ones.
 
+`unresolvedAlerts` beside that count holds the same 9 here, but it is capped at the 20
+most recent: on a system with more open alerts than that, `unresolvedAlertCount` is the
+larger number and the array is a preview. The report is a summary; the complete history
+is step 16.
+
 ---
 
 ## Part 5 — Alerts
 
 ### 16. Alert history
 
-`GET /api/alerts` → all 9, newest first.
+`GET /api/alerts` → all 9 in `items`, newest first, with `total: 9`. Add `?size=4` to
+walk them in three pages — the ordering breaks ties on `id`, so no alert is served twice
+or skipped even though all nine share a `detectedAt`.
 
 ### 17. Filtered history
 

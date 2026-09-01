@@ -5,13 +5,14 @@ it would take to fix.
 
 | Document | Contents |
 |---|---|
-| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed; a suggested order of work; the measurement method |
+| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 8 of 15 so far; a suggested order of work; the measurement method |
 
 ## The short version
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
-104 tests pass and the API returns correct answers throughout. Three findings are rated
-critical, and all three are now fixed, as are the first two of the high-severity ones:
+tests pass and the API returns correct answers throughout. Three findings are rated
+critical, and all three are now fixed, as are all four high-severity ones and the first
+medium:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -42,23 +43,54 @@ critical, and all three are now fixed, as are the first two of the high-severity
   single batched `INSERT` — an `ADMIN` warnings poll fell from 6 statements to 3, and a
   first scan from 14 to 8. The dedup rule itself is unchanged
   ([../business-rules/ALERTING.md](../business-rules/ALERTING.md)).
+- **PERF-06** — *fixed.* The session factory used SQLAlchemy's default expiry, so a
+  `commit()` expired every row the request had loaded and serialising the response
+  re-`SELECT`ed each one — a wasted round trip per row returned. `expire_on_commit=False`
+  removes them: an `ADMIN` warnings first scan fell from 8 statements to 4. Nothing relied
+  on the expiry — the four services that want post-commit state call `db.refresh()`
+  explicitly ([../design/DATABASE.md § 3](../design/DATABASE.md#3-the-session-factory)).
 
-The remaining ten range from the post-commit re-`SELECT` per row (**PERF-06**) down to
-notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is
-correct as written and should not be changed.
+- **PERF-07** — *fixed.* Six of the seven list endpoints returned every matching row, so
+  the response grew with the table on `alerts`, which nothing prunes — and the report
+  serialised every unresolved alert purely to report their number. All seven now share one
+  `page`/`size` convention ([app/pagination.py](../../app/pagination.py)) and answer with
+  `PageResponse`; the report counts in SQL and embeds the 20 most recent. Measured on a
+  grown database, `GET /api/alerts` fell from 709 rows and 144 KB to 10 rows and 2 KB, and
+  its peak allocation stopped growing with the table — 96 KiB at 700 extra instances and
+  still 97 KiB at 3,000, against 2.2 MB and 9.0 MB before. The monitoring scans still
+  detect over **every** match and page only their response, which is the one thing the
+  obvious implementation would have got wrong
+  ([../business-rules/ALERTING.md § 2](../business-rules/ALERTING.md#2-detection-writes-alerts)).
+  This is a **breaking** change to those six response shapes.
+- **PERF-08** — *fixed*, as a consequence of PERF-07. `total = query.count()` wrapped the
+  whole built query, so the database sorted the full filtered set in order to count it.
+  The shared `paginate()` helper counts before ordering and over the primary key alone,
+  which was not optional: writing the old form into a helper six more endpoints were about
+  to call would have spread the defect. Four plan steps — a co-routine subquery, an index
+  search, a temp B-tree and a scan — collapse to one covering index seek.
 
-Every figure is measured against the seeded demo database, not estimated; the method is at
-the end of the document so any number can be reproduced. Five findings — PERF-01, PERF-02,
-PERF-03, PERF-04 and PERF-05 — have been fixed; the rest are recorded and still open.
+With PERF-05, PERF-06 and PERF-07 closed, neither a monitoring scan's statement count nor
+any list endpoint's response grows with the result set. The remaining seven findings are
+smaller: two unnecessary queries on the auth path (**PERF-10**, **PERF-11**), an
+unconditional join (**PERF-09**), aggregation done in Python (**PERF-12**), and notes
+recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is correct
+as written and should not be changed.
+
+Every figure is measured against the seeded demo database — or, where the seed is too
+small to show a difference, against that database grown with several thousand extra
+instances — not estimated; the method is at the end of the document so any number can be
+reproduced. Eight findings, PERF-01 through PERF-08, have been fixed; the rest are recorded
+and still open.
 
 ## Related
 
 | Document | Why |
 |---|---|
 | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) | The layering and session handling the findings sit in |
+| [../design/DATABASE.md](../design/DATABASE.md) | The engine, pool and session factory behind PERF-02 and PERF-06 |
 | [../design/ERD.md](../design/ERD.md) | The schema, and the indexes PERF-04 added to it |
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The diagnosis endpoint behind PERF-03 and PERF-14 |
-| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 had to preserve, and did |
-| [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention PERF-07 would extend |
+| [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 had to preserve, and why PERF-07 pages a scan's response but not its detection |
+| [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention PERF-07 extended to every list endpoint |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Why a passing suite catches none of this |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Keeping this document current when a finding is fixed |

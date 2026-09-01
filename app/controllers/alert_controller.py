@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from app.core.deps import accessible_client_ids, assert_client_access, get_current_member
 from app.database import get_db
 from app.models import AlertType, Member
-from app.schemas.schemas import AlertOut
+from app.pagination import DEFAULT_SIZE, PageParam, SizeParam
+from app.schemas.schemas import AlertOut, PageResponse
 from app.services import alert_service
 
 router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
@@ -14,10 +15,12 @@ router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
 
 @router.get(
     "",
-    response_model=list[AlertOut],
-    summary="Alert history (date / type / resolved filter)",
+    response_model=PageResponse[AlertOut],
+    summary="Alert history (pagination / date / type / resolved filter)",
 )
 def list_alerts(
+    page: PageParam = 1,
+    size: SizeParam = DEFAULT_SIZE,
     alertType: AlertType | None = Query(None, description="Filter by alert type"),
     isResolved: bool | None = Query(None, description="Filter by resolved state"),
     dateFrom: date | None = Query(None, description="Detected on/after (YYYY-MM-DD)"),
@@ -25,13 +28,18 @@ def list_alerts(
     db: Session = Depends(get_db),
     member: Member = Depends(get_current_member),
 ):
-    return alert_service.list_alerts(
+    items, total, total_pages = alert_service.list_alerts(
         db,
         accessible_client_ids(member, db),
+        page=page,
+        size=size,
         alertType=alertType,
         isResolved=isResolved,
         dateFrom=dateFrom,
         dateTo=dateTo,
+    )
+    return PageResponse(
+        items=items, total=total, page=page, size=size, totalPages=total_pages
     )
 
 

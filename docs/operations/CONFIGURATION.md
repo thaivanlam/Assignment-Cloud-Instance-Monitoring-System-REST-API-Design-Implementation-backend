@@ -171,7 +171,7 @@ facts and the test suite asserts exactly.
 | `SLA_*` | The compliance verdict per plan — [../business-rules/SLA.md](../business-rules/SLA.md) |
 
 Changing one in a *deployment* is fine and takes effect on restart. Changing one in
-`app/config.py` is a code change: the 104 tests assert the seeded figures, and
+`app/config.py` is a code change: the 123 tests assert the seeded figures, and
 [../demo/SEED_DATA.md](../demo/SEED_DATA.md),
 [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) and the Swagger captures all quote them —
 so the document and the captures move in the same commit
