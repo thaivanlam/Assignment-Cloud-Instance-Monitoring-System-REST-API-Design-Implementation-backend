@@ -5,14 +5,14 @@ it would take to fix.
 
 | Document | Contents |
 |---|---|
-| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 8 of 15 so far; a suggested order of work; the measurement method |
+| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 9 of 15 so far; a suggested order of work; the measurement method |
 
 ## The short version
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 tests pass and the API returns correct answers throughout. Three findings are rated
 critical, and all three are now fixed, as are all four high-severity ones and the first
-medium:
+two medium:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -68,19 +68,27 @@ medium:
   which was not optional: writing the old form into a helper six more endpoints were about
   to call would have spread the defect. Four plan steps — a co-routine subquery, an index
   search, a temp B-tree and a scan — collapse to one covering index seek.
+- **PERF-09** — *fixed.* `GET /api/alerts` joined `instances` on every request, but the
+  join exists only to reach `Instance.clientId` for a `CLIENT_MANAGER`'s scope — an
+  `ADMIN` has no scope to apply and was paying an index lookup per row scanned, twice per
+  request since PERF-07 added the count query. The join is now made inside the branch that
+  needs it. Dropping an inner join changes an answer if a row can be orphaned, so that was
+  checked rather than assumed: `Instance.alerts` cascades its delete, no alert outlives its
+  instance, and a test now pins it. The `ADMIN` plans lose the per-row `SEARCH instances`
+  from both statements, and at 20,000 alerts the request falls from 5.7 ms to 4.5 ms.
 
 With PERF-05, PERF-06 and PERF-07 closed, neither a monitoring scan's statement count nor
 any list endpoint's response grows with the result set. The remaining seven findings are
-smaller: two unnecessary queries on the auth path (**PERF-10**, **PERF-11**), an
-unconditional join (**PERF-09**), aggregation done in Python (**PERF-12**), and notes
-recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is correct
+smaller: two unnecessary queries on the auth path (**PERF-10**, **PERF-11**), aggregation
+done in Python (**PERF-12**), and notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is correct
 as written and should not be changed.
 
 Every figure is measured against the seeded demo database — or, where the seed is too
 small to show a difference, against that database grown with several thousand extra
 instances — not estimated; the method is at the end of the document so any number can be
-reproduced. Eight findings, PERF-01 through PERF-08, have been fixed; the rest are recorded
-and still open.
+reproduced. Nine findings, PERF-01 through PERF-09, have been fixed; the rest are recorded
+and still open. PERF-09 is the one whose payoff is a wall-clock number rather than a
+statement count — it removes work from inside a query without changing how many run.
 
 ## Related
 
@@ -92,5 +100,6 @@ and still open.
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The diagnosis endpoint behind PERF-03 and PERF-14 |
 | [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | The dedup rule PERF-05 had to preserve, and why PERF-07 pages a scan's response but not its detection |
 | [../api/CONVENTIONS.md](../api/CONVENTIONS.md) | The pagination convention PERF-07 extended to every list endpoint |
+| [../security/README.md](../security/README.md) | The sibling register — the same codebase reviewed for what it exposes rather than what it costs |
 | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) | Why a passing suite catches none of this |
 | [../contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md) | Keeping this document current when a finding is fixed |

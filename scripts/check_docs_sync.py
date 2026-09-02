@@ -35,8 +35,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # When a row is added there, add it here in the same commit — this file is governed by
 # the rule it enforces.
 MAPPING: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("app/controllers/", ("docs/api/ENDPOINTS.md", "docs/api/OVERVIEW.md")),
-    ("app/schemas/", ("docs/api/ENDPOINTS.md",)),
+    (
+        "app/controllers/",
+        (
+            "docs/api/ENDPOINTS.md",
+            "docs/api/OVERVIEW.md",
+            "docs/requirements/FRS.md",
+            "docs/manual/USER_MANUAL.md",
+        ),
+    ),
+    ("app/schemas/", ("docs/api/ENDPOINTS.md", "docs/requirements/FRS.md")),
     ("app/models/", ("docs/design/ERD.md",)),
     ("app/services/instance_service.py", ("docs/business-rules/INSTANCE_LIFECYCLE.md",)),
     ("app/services/monitor_service.py", ("docs/business-rules/ALERTING.md",)),
@@ -73,7 +81,7 @@ MAPPING: tuple[tuple[str, tuple[str, ...]], ...] = (
             "docs/operations/DEPLOYMENT.md",
         ),
     ),
-    ("tests/", ("docs/testing/FUNCTIONAL_TESTS.md",)),
+    ("tests/", ("docs/testing/FUNCTIONAL_TESTS.md", "docs/testing/TEST_CASES.md")),
 )
 
 # Sources whose change can show up in a Swagger capture. Whether it actually did is a

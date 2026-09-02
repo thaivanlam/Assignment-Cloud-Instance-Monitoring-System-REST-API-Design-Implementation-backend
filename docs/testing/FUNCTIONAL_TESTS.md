@@ -102,7 +102,7 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-123 cases across six files. Each file covers one area of the API.
+124 cases across six files. Each file covers one area of the API.
 
 ### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
 
@@ -169,7 +169,7 @@ Rules: [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFE
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../team/MEMBER_C.md](../team/MEMBER_C.md).
 
-### 4.4 `test_alerts.py` — alert history and resolution (23 cases)
+### 4.4 `test_alerts.py` — alert history and resolution (24 cases)
 
 The `scanned` fixture runs all three monitoring scans as ADMIN first, producing the full
 set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
@@ -193,6 +193,7 @@ set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
 | `alert_history_page_past_the_end_is_empty_not_404` | `page=99` is a `200` with empty `items` |
 | `alert_history_rejects_out_of_range_paging` | `page=0`, `size=0`, `size=101` → `422` |
 | `alert_pagination_applies_after_filtering_and_scoping` | `total` is the scoped, filtered count — 2 for manager1's CPU alerts, not 4 |
+| `deleting_an_instance_removes_its_alerts_from_the_history` | No alert outlives its instance. The listing joins `instances` only to scope a `CLIENT_MANAGER`, so an orphaned alert would be hidden from one role and listed to the other ([../performance/PERFORMANCE_BUGS.md § PERF-09](../performance/PERFORMANCE_BUGS.md#perf-09)); the cascade is what stops one existing |
 
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.

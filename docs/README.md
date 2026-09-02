@@ -6,12 +6,15 @@ own README linking to the files inside it.
 | Folder | Contents |
 |---|---|
 | [onboarding/](onboarding/README.md) | How to read this codebase for the first time |
+| [requirements/](requirements/README.md) | BRD, SRS, FRS and the use case / user story specification |
 | [api/](api/README.md) | Overview, authentication, request conventions, errors, per-endpoint reference |
 | [business-rules/](business-rules/README.md) | Authorization, instance lifecycle, alerting, cost, SLA |
+| [manual/](manual/README.md) | End-user manual for operating the system |
 | [demo/](demo/README.md) | Demo accounts, seed data, step-by-step walkthrough |
 | [design/](design/README.md) | Architecture, ERD, database engine, LLM feature design |
 | [testing/](testing/README.md) | Functional test suite and how to run it |
 | [performance/](performance/README.md) | Measured latency, throughput and concurrency findings |
+| [security/](security/README.md) | Reproduced injection, disclosure and session findings |
 | [operations/](operations/README.md) | Deploying, configuring and troubleshooting a running deployment |
 | [team/](team/README.md) | Per-member assignment scope |
 | [contributing/](contributing/README.md) | Commit conventions and documentation rules |
@@ -25,6 +28,9 @@ own README linking to the files inside it.
 | If you want to… | Read |
 |---|---|
 | Read the source for the first time | [onboarding/READING_ORDER.md](onboarding/READING_ORDER.md) |
+| Know what the system was built to do, and for whom | [requirements/BRD.md](requirements/BRD.md) → [requirements/SRS.md](requirements/SRS.md) |
+| Look up exactly how one function must behave | [requirements/FRS.md](requirements/FRS.md) |
+| Use the system as an operator | [manual/USER_MANUAL.md](manual/USER_MANUAL.md) |
 | Run the API and click through it | [demo/README.md](demo/README.md) → [demo/WALKTHROUGH.md](demo/WALKTHROUGH.md) |
 | Call an endpoint from client code | [api/AUTHENTICATION.md](api/AUTHENTICATION.md) → [api/ENDPOINTS.md](api/ENDPOINTS.md) |
 | Understand *why* a response looks that way | [business-rules/README.md](business-rules/README.md) |
@@ -32,7 +38,9 @@ own README linking to the files inside it.
 | Know which database a run opens | [design/DATABASE.md](design/DATABASE.md) |
 | Work on the AI diagnosis feature | [design/LLM_FEATURE.md](design/LLM_FEATURE.md) |
 | Run the tests, or add one | [testing/RUNNING_TESTS.md](testing/RUNNING_TESTS.md) → [testing/FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) |
+| Check a case by hand, or trace a requirement to its test | [testing/TEST_CASES.md](testing/TEST_CASES.md) |
 | Know what is slow, and why | [performance/PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) |
+| Know what is exposed, and why | [security/SECURITY_BUGS.md](security/SECURITY_BUGS.md) |
 | Deploy it somewhere, or configure its keys | [operations/DEPLOYMENT.md](operations/DEPLOYMENT.md) → [operations/CONFIGURATION.md](operations/CONFIGURATION.md) |
 | Fix a server that will not start, or stopped answering | [operations/RUNBOOKS.md](operations/RUNBOOKS.md) |
 | Commit a change | [contributing/COMMITS.md](contributing/COMMITS.md) |
@@ -45,6 +53,13 @@ own README linking to the files inside it.
 **[onboarding/](onboarding/README.md)**
 
 - [READING_ORDER.md](onboarding/READING_ORDER.md) — function-by-function reading path through `app/`, in call-dependency order
+
+**[requirements/](requirements/README.md)**
+
+- [BRD.md](requirements/BRD.md) — business context, objectives, stakeholders, scope, 19 business requirements, known shortfalls, risks
+- [SRS.md](requirements/SRS.md) — functional requirements FR-01…FR-10, non-functional requirements, interfaces, data requirements, verification
+- [FRS.md](requirements/FRS.md) — 24 function specs: inputs, processing rules, outputs, failure paths
+- [USE_CASES.md](requirements/USE_CASES.md) — 15 use cases with alternative flows, 30 user stories with acceptance criteria
 
 **[api/](api/README.md)**
 
@@ -62,6 +77,10 @@ own README linking to the files inside it.
 - [COST.md](business-rules/COST.md) — unit pricing, current cost, forecast
 - [SLA.md](business-rules/SLA.md) — plan thresholds, uptime approximation
 
+**[manual/](manual/README.md)**
+
+- [USER_MANUAL.md](manual/USER_MANUAL.md) — operating the system task by task, with an error-message reference and an FAQ
+
 **[demo/](demo/README.md)**
 
 - [ACCOUNTS.md](demo/ACCOUNTS.md) — credentials and client ownership
@@ -77,12 +96,17 @@ own README linking to the files inside it.
 
 **[testing/](testing/README.md)**
 
+- [TEST_CASES.md](testing/TEST_CASES.md) — case specification: preconditions, steps, data, expected results, priority, traceability
 - [FUNCTIONAL_TESTS.md](testing/FUNCTIONAL_TESTS.md) — test approach, fixtures, suite catalogue, coverage, gaps
 - [RUNNING_TESTS.md](testing/RUNNING_TESTS.md) — install, run, select tests, read a failure, troubleshooting
 
 **[performance/](performance/README.md)**
 
 - [PERFORMANCE_BUGS.md](performance/PERFORMANCE_BUGS.md) — 15 measured performance findings, ranked, with fixes
+
+**[security/](security/README.md)**
+
+- [SECURITY_BUGS.md](security/SECURITY_BUGS.md) — 15 reproduced security findings, ranked, with fixes and what was found sound
 
 **[operations/](operations/README.md)**
 

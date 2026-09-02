@@ -57,8 +57,8 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 
 | When you change… | Update… |
 |---|---|
-| `app/controllers/**` — routes, params, status codes | [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../api/OVERVIEW.md](../api/OVERVIEW.md) |
-| `app/schemas/**` — request/response fields | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) |
+| `app/controllers/**` — routes, params, status codes | [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../api/OVERVIEW.md](../api/OVERVIEW.md), [../requirements/FRS.md](../requirements/FRS.md), [../manual/USER_MANUAL.md](../manual/USER_MANUAL.md) |
+| `app/schemas/**` — request/response fields | [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../requirements/FRS.md](../requirements/FRS.md) |
 | `app/models/**` — tables, columns, relationships | [../design/ERD.md](../design/ERD.md) |
 | `app/services/instance_service.py` | [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFECYCLE.md) |
 | `app/services/monitor_service.py`, `alert_service.py` | [../business-rules/ALERTING.md](../business-rules/ALERTING.md) |
@@ -71,7 +71,7 @@ in both [../README.md](../README.md) and the root [README.md](../../README.md).
 | `app/config.py` — thresholds, pricing, settings | [../business-rules/README.md](../business-rules/README.md), [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) |
 | `app/seed.py` — demo data | [../demo/SEED_DATA.md](../demo/SEED_DATA.md), [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) |
 | `app/main.py` — routers, handlers, startup | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md), [../api/ERRORS.md](../api/ERRORS.md), [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md) — § 3 describes what the startup hook does |
-| `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md) |
+| `tests/**` — cases, fixtures | [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md), [../testing/TEST_CASES.md](../testing/TEST_CASES.md) |
 | Project layout or new module | [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) |
 | A function under `app/**` is added, removed, renamed or moved | [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — it walks the functions in order and cites their line numbers |
 | Anything visible in a Swagger response — a route, a field, a status code, an error body, seed numbers | [../screenshots/](../screenshots/README.md) — re-capture the affected PNGs ([how](#6-screenshots-follow-the-api)) |

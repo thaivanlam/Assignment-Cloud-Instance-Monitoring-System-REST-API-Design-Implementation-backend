@@ -17,7 +17,7 @@ MVC layout under `app/`:
 
 ```bash
 uvicorn app.main:app --reload   # run (Swagger at /docs)
-pytest -q                       # tests — 123 functional tests, no API key needed
+pytest -q                       # tests — 124 functional tests, no API key needed
 ```
 
 `monitoring.db` is created and seeded automatically on startup by `app/seed.py`.

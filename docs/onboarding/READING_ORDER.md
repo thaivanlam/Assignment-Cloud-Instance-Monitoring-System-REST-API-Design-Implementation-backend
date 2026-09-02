@@ -334,8 +334,8 @@ The consumer side of what Stage 5 produces.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 57 | `list_alerts` | [alert_service.py:11](../../app/services/alert_service.py#L11) | Alerts carry no `clientId`, so scoping needs `join(Instance)` — the join *is* the role filter. Date filters widen a `date` to `time.min` / `time.max`, so `dateTo` includes the whole day. The sort is `detectedAt` **then `id`**: a scan stamps every alert it writes with the same instant, so here ties are the rule rather than the exception, and a page boundary inside a tie would otherwise be undefined. |
-| 58 | `resolve_alert` | [alert_service.py:46](../../app/services/alert_service.py#L46) | Idempotent: an already-resolved alert is returned unchanged, and `resolvedAt` is not overwritten. |
+| 57 | `list_alerts` | [alert_service.py:11](../../app/services/alert_service.py#L11) | Alerts carry no `clientId`, so scoping needs `join(Instance)` — the join *is* the role filter, which is why it is made inside the scope branch rather than above it: an `ADMIN` has no scope and gets no join (PERF-09). Dropping it for that role is safe only because no alert outlives its instance. Date filters widen a `date` to `time.min` / `time.max`, so `dateTo` includes the whole day. The sort is `detectedAt` **then `id`**: a scan stamps every alert it writes with the same instant, so here ties are the rule rather than the exception, and a page boundary inside a tie would otherwise be undefined. |
+| 58 | `resolve_alert` | [alert_service.py:53](../../app/services/alert_service.py#L53) | Idempotent: an already-resolved alert is returned unchanged, and `resolvedAt` is not overwritten. |
 
 **Controller** —
 [app/controllers/alert_controller.py](../../app/controllers/alert_controller.py):

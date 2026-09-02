@@ -5,14 +5,21 @@ themselves live in [../../tests/](../../tests/).
 
 | Document | Contents |
 |---|---|
+| [TEST_CASES.md](TEST_CASES.md) | Test case specification — preconditions, steps, data, expected results, priority, and the automated test that runs each one |
 | [FUNCTIONAL_TESTS.md](FUNCTIONAL_TESTS.md) | Test approach, fixtures and isolation, the suite catalogue, endpoint coverage, deliberate gaps |
 | [RUNNING_TESTS.md](RUNNING_TESTS.md) | Install, run, select individual tests, read a failure, troubleshooting |
+
+[TEST_CASES.md](TEST_CASES.md) and [FUNCTIONAL_TESTS.md](FUNCTIONAL_TESTS.md) answer
+different questions. The first is *what must be checked* — a case list with expected
+values, executable by hand against a running server and traceable back to a requirement.
+The second is *how the automated suite that runs those cases is built* — its fixtures, its
+isolation, and what it deliberately leaves out.
 
 ## The short version
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q            # 123 passed
+pytest -q            # 124 passed
 ```
 
 Every test drives the API over HTTP against a fresh in-memory database seeded with the
@@ -28,6 +35,8 @@ documents from going stale.
 
 | Document | Why |
 |---|---|
+| [../requirements/FRS.md](../requirements/FRS.md) | The rules each case checks |
+| [../requirements/USE_CASES.md](../requirements/USE_CASES.md) | The acceptance criteria the cases were written from |
 | [../api/ENDPOINTS.md](../api/ENDPOINTS.md) | The contract the tests assert |
 | [../api/ERRORS.md](../api/ERRORS.md) | The failure status codes and body shapes asserted on |
 | [../business-rules/](../business-rules/README.md) | The rules each test case pins down |

@@ -256,3 +256,24 @@ def test_alert_pagination_applies_after_filtering_and_scoping(scanned, auth_head
     # manager1 sees two of the four CPU_HIGH alerts; `total` is that scoped count.
     assert response.json()["total"] == 2
     assert {alert["instanceId"] for alert in response.json()["items"]} == {1, 4}
+
+
+def test_deleting_an_instance_removes_its_alerts_from_the_history(scanned, auth_headers):
+    """No alert outlives its instance, so the history never holds an orphan.
+
+    `list_alerts` joins `instances` only when a CLIENT_MANAGER's scope has to be
+    applied (docs/performance/PERFORMANCE_BUGS.md § PERF-09). An ADMIN's query has no
+    join, so a row whose `instanceId` pointed at nothing would now be listed where the
+    inner join used to hide it. It cannot: `Instance.alerts` cascades the delete. This
+    pins that, because losing the cascade would turn a storage bug into a visible one.
+    """
+    client, db = scanned
+    # Instance 3 is STOPPED, so it is deletable, and its LONG_STOPPED alert exists.
+    assert db.query(Alert).filter(Alert.instanceId == 3).count() == 1
+
+    assert client.delete("/api/instances/3", headers=auth_headers["manager1"]).status_code == 204
+
+    history = client.get("/api/alerts?size=100", headers=auth_headers["admin"]).json()
+    assert history["total"] == 8
+    assert 3 not in {alert["instanceId"] for alert in history["items"]}
+    assert db.query(Alert).filter(Alert.instanceId == 3).count() == 0

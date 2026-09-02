@@ -16,6 +16,9 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-01](#2026-09-01--requirements-test-cases-and-a-user-manual) | Requirements, test cases and a user manual | BRD, SRS, FRS, use cases and user stories; a test case specification; an end-user manual |
+| [2026-09-01](#2026-09-01--security-review) | Security review | 15 reproduced findings, two critical — a signing key anyone can read, and credentials served to anyone |
+| [2026-09-01](#2026-09-01--perf-09-fixed-the-alert-listing-joins-only-when-it-has-to) | PERF-09 fixed | An `ADMIN` reading alert history no longer joins `instances` for a column nothing uses |
 | [2026-09-01](#2026-09-01--perf-07-fixed-every-list-endpoint-is-paginated) | PERF-07 fixed | Every list endpoint paginates — **breaking**; a response no longer grows with the table |
 | [2026-09-01](#2026-09-01--perf-06-fixed-a-commit-no-longer-re-selects-the-rows-it-returns) | PERF-06 fixed | A monitoring scan is four statements whether it returns 4 rows or 500 |
 | [2026-09-01](#2026-09-01--operations-runbooks) | Operations runbooks | Deployment, configuration and 15 incident runbooks for whoever is on call |
@@ -39,6 +42,145 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-01 — Requirements, test cases and a user manual
+
+### Documentation
+
+- **Added [requirements/](../requirements/README.md)** — the specification layer the
+  repository did not have. [BRD.md](../requirements/BRD.md) records the business context
+  (the spreadsheet these ten client companies were tracked in), six objectives,
+  stakeholders, scope, and 19 business requirements. [SRS.md](../requirements/SRS.md)
+  carries ten functional requirements and the non-functional set — performance, security,
+  reliability, maintainability, portability, usability — each marked with how it is
+  verified. [FRS.md](../requirements/FRS.md) specifies 24 functions, inputs through
+  failure paths, including the three cross-cutting ones (pagination, scoping, error
+  mapping) that every endpoint inherits.
+  [USE_CASES.md](../requirements/USE_CASES.md) holds 15 use cases with their alternative
+  flows and 30 user stories with Given/When/Then criteria naming the test that holds each
+  one. `4f492fb`
+- **Added [testing/TEST_CASES.md](../testing/TEST_CASES.md)** — 100 cases with
+  precondition, steps, data and exact expected result, each linked to the automated test
+  that runs it. The cases that **cannot** be automated say so: the December forecast
+  roll-over, the diagnosis timeout, and mid-month SLA windows are marked *Manual* rather
+  than left looking covered. It sits beside
+  [FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md), which describes how the suite is
+  built rather than what must be checked. `1bcd427`
+- **Added [manual/USER_MANUAL.md](../manual/USER_MANUAL.md)** — the end-user document, in
+  task order rather than endpoint order, with an error-message table mapping every status
+  code to what to do about it, and an FAQ answering the questions the design provokes:
+  why a repeated status update changes nothing, why a resolved alert comes back, and why
+  an SLA figure must not be quoted to a client. `ec11e69`
+- **Wired the new folders into the indexes** — [../README.md](../README.md), the root
+  [README.md](../../README.md) and the folder READMEs, per rule 4 of
+  [contributing/DOCUMENTATION.md](../contributing/DOCUMENTATION.md). The root README's
+  "eleven documentation folders" was already stale at thirteen; it now reads fifteen.
+  `47d9ebc`
+- **Extended the source → document mapping** in
+  [contributing/DOCUMENTATION.md § 5](../contributing/DOCUMENTATION.md#5-source--document-mapping)
+  and in `MAPPING` in [check_docs_sync.py](../../scripts/check_docs_sync.py), in the same
+  commit as the rule requires: a change under `app/controllers/` now also points at the
+  FRS and the user manual, `app/schemas/` at the FRS, and `tests/` at the test cases. The
+  check only warns when *none* of a row's documents are staged, so the added rows raise no
+  new noise. `490b7db`
+
+Traceability now runs end to end — **BR → FR/NFR → F-\* → UC/US → TC** — and it is
+traceability against the delivered system: the documents were written from the code and
+the tests, so where a requirement is only partly met they say so. BR-13 (SLA reporting) is
+recorded as partially met against the uptime approximation, and NFR-SEC-06 and NFR-SEC-07
+are recorded as **not met** against the open findings in
+[security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md).
+
+No code changed and no behaviour moved. All 124 tests still pass.
+
+---
+
+## 2026-09-01 — Security review
+
+### Documentation
+
+- **Added [security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md)** — 15 findings on
+  injection, information disclosure and session integrity, each **reproduced** against the
+  seeded API through the same `TestClient` harness the suite uses, with the application
+  code unmodified. Two are rated critical, and both bypass authentication without touching
+  the API's logic: the default `SECRET_KEY` is a literal in `config.py` and `.env.example`,
+  and a token forged with it was accepted at an `ADMIN`-only endpoint (SEC-01); the three
+  seeded accounts and their passwords are served to anyone by `/openapi.json` and `/docs`
+  (SEC-02). The session finding the review was asked for is SEC-04 — there is no logout and
+  no revocation, so an issued token cannot be stopped before its expiry — blocked behind
+  SEC-08, because the token carries no `jti` or `iat` to name in a denylist. The document
+  also records what was checked and found sound: **SQL injection is not present and is
+  structurally prevented**, and no stack trace reaches a client. `97955e9`
+- **Indexed the new folder** from [../README.md](../README.md), the root
+  [README.md](../../README.md), [../performance/README.md](../performance/README.md) and
+  this folder's README. `97955e9`
+
+No code changed and nothing is fixed — this is the register, in the same shape as
+[performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md), and the order to
+work through it is at
+[Where to start](../security/SECURITY_BUGS.md#where-to-start). All 124 tests still pass,
+which is the point: none of them catch any of this.
+
+---
+
+## 2026-09-01 — PERF-09 fixed: the alert listing joins only when it has to
+
+The first of the two remaining medium findings closed, and the smallest fix in this
+series: two lines moved inside a branch. No behaviour changed. 124 tests pass — the 123
+that existed, unchanged, plus one new one.
+
+### Fixed
+
+- **`list_alerts` joins `instances` only when a scope has to be applied.**
+  [../../app/services/alert_service.py](../../app/services/alert_service.py) joined
+  unconditionally, but the join exists solely to reach `Instance.clientId` for a
+  `CLIENT_MANAGER`'s scope filter. An `ADMIN` has `client_ids is None`, never applies that
+  filter, and was paying an index lookup into `instances` for every row scanned — twice per
+  request since [PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07) added the count query
+  over the same statement. Both `ADMIN` plans lose their per-row
+  `SEARCH instances USING COVERING INDEX ix_instances_id`; the count's plan collapses to a
+  single `SCAN alerts USING COVERING INDEX ix_alerts_id`. The `CLIENT_MANAGER` query is
+  byte for byte what it was.
+- **Measured as a time, not a count**, because the statement count does not change — 3 for
+  an `ADMIN`, 4 for a `CLIENT_MANAGER`, before and after. Median of 60 `ADMIN`
+  `GET /api/alerts` requests: unchanged at 4.0 ms on the seed's 9 alerts, and **5.7 ms →
+  4.5 ms** with the table grown to 20,009. The join costs what `alerts` costs, and `alerts`
+  is the table nothing prunes. At seed scale the difference is inside the noise, which the
+  finding says rather than rounding in its own favour.
+
+### Added
+
+- **`test_deleting_an_instance_removes_its_alerts_from_the_history`** in
+  [../../tests/test_alerts.py](../../tests/test_alerts.py). An inner join filters as well
+  as costs, so removing one is only safe if no alert can outlive its instance — otherwise
+  an orphaned row would now be listed to an `ADMIN` while still hidden from a
+  `CLIENT_MANAGER`. `Instance.alerts` is declared `cascade="all, delete-orphan"`, so none
+  can. The test deletes instance 3 after a scan and asserts its `LONG_STOPPED` alert goes
+  with it and the history falls from 9 to 8, because losing that cascade would now be a
+  visible bug rather than only a storage one.
+
+### Documentation
+
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-09 marked
+  **Fixed**, with what landed, the safety argument for dropping an inner join, the
+  before/after plans and latencies, and what is deliberately left alone on the
+  `CLIENT_MANAGER` path. Two corrections in place: the finding's quoted plan still carried
+  a `USE TEMP B-TREE FOR ORDER BY` that
+  [PERF-04](../performance/PERFORMANCE_BUGS.md#perf-04) and PERF-07 had already removed, so
+  the join was the whole of the remaining waste; and the measurement section said the seed
+  holds 16 instances where it has always held 15
+  ([../demo/SEED_DATA.md](../demo/SEED_DATA.md)). Step 8 of the suggested order splits into
+  8a (done) and 8b, since the conditional join carries none of the risk that the auth-path
+  changes do.
+- [../business-rules/ALERTING.md](../business-rules/ALERTING.md) — § 5 now says why the
+  delete cascade is load-bearing for the listing rather than merely tidy.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md),
+  [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md),
+  [../performance/README.md](../performance/README.md) and the test counts in
+  [../../README.md](../../README.md) and [../../CLAUDE.md](../../CLAUDE.md) — the new case,
+  the moved `resolve_alert` line reference, 9 of 15 findings fixed, 123 → 124.
 
 ---
 
