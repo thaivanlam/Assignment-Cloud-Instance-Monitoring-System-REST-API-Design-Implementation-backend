@@ -5,14 +5,14 @@ it would take to fix.
 
 | Document | Contents |
 |---|---|
-| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 10 of 15 so far; a suggested order of work; the measurement method |
+| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 11 of 15 so far; a suggested order of work; the measurement method |
 
 ## The short version
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 tests pass and the API returns correct answers throughout. Three findings are rated
 critical, and all three are now fixed, as are all four high-severity ones and the first
-three medium:
+four medium:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -84,18 +84,29 @@ three medium:
   unchanged. It also removes a bind parameter per client the manager owns. The `members`
   lookup stays — re-reading the row is what makes a deleted member's token stop working
   ([../business-rules/AUTHORIZATION.md § 2.1](../business-rules/AUTHORIZATION.md#21-list-endpoints--filter-at-the-query)).
+- **PERF-11** — *fixed.* The other half of the auth path: a single-object endpoint reached
+  `instance.client` to compare one integer, `managerId`, which fetched a whole `clients`
+  row per request — and two rows on `PATCH /api/alerts/{id}/resolve`, which walked
+  `alert.instance.client`. A second guard beside `assert_client_access` takes the client
+  *id* the caller already holds and asks the PERF-10 scope whether it is in range, as one
+  `EXISTS`; the alert's instance now arrives with the alert instead of on a load of its
+  own. Every single-object request an `ADMIN` makes loses a statement — the loads fed a
+  check an `ADMIN` skips — and `resolve_alert` loses two; a `CLIENT_MANAGER` trades a
+  fetched-and-hydrated row for a boolean, and loses one on the alert path
+  ([../business-rules/AUTHORIZATION.md § 2.2](../business-rules/AUTHORIZATION.md#22-single-resource-endpoints--check-after-load)).
 
 With PERF-05, PERF-06 and PERF-07 closed, neither a monitoring scan's statement count nor
-any list endpoint's response grows with the result set. The remaining five findings are
-smaller: a pair of lazy loads on the single-object auth path (**PERF-11**), aggregation
-done in Python (**PERF-12**), and notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is correct
-as written and should not be changed.
+any list endpoint's response grows with the result set. The remaining four findings are
+smaller: aggregation done in Python (**PERF-12**), a client rebuilt per LLM request
+(**PERF-14**), startup work repeated on every boot (**PERF-15**) — and one recorded
+deliberately rather than as a defect, the login KDF cost (**PERF-13**), which is correct as
+written and should not be changed.
 
 Every figure is measured against the seeded demo database — or, where the seed is too
 small to show a difference, against that database grown with several thousand extra
 instances — not estimated; the method is at the end of the document so any number can be
-reproduced. Ten findings, PERF-01 through PERF-10, have been fixed; the rest are recorded
-and still open. PERF-09 is the one whose payoff is a wall-clock number rather than a
+reproduced. Eleven findings, PERF-01 through PERF-11, have been fixed; the rest are
+recorded and still open. PERF-09 is the one whose payoff is a wall-clock number rather than a
 statement count — it removes work from inside a query without changing how many run.
 
 ## Related

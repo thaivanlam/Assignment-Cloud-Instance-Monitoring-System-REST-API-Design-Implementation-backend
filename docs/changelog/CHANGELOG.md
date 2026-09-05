@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-05](#2026-09-05--perf-11-fixed-the-single-object-guard-stops-loading-the-client) | PERF-11 fixed | A single-object endpoint no longer fetches a whole `clients` row to compare one integer |
 | [2026-09-05](#2026-09-05--perf-10-fixed-a-managers-scope-rides-inside-the-query) | PERF-10 fixed | A `CLIENT_MANAGER` request no longer runs a query just to find out which clients they manage |
 | [2026-09-01](#2026-09-01--requirements-test-cases-and-a-user-manual) | Requirements, test cases and a user manual | BRD, SRS, FRS, use cases and user stories; a test case specification; an end-user manual |
 | [2026-09-01](#2026-09-01--security-review) | Security review | 15 reproduced findings, two critical — a signing key anyone can read, and credentials served to anyone |
@@ -43,6 +44,86 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-05 — PERF-11 fixed: the single-object guard stops loading the client
+
+The eleventh of the fifteen performance findings closed, and the second half of the
+auth-path work — step 8c, which 8b above left standing. No behaviour changed: every status
+code and every response body is what it was, for both roles. 127 tests pass — the 125 that
+existed, unchanged, plus two new ones.
+
+### Fixed
+
+- **The single-object guard has an id form.** `assert_client_id_access` joins
+  `assert_client_access` in [../../app/core/deps.py](../../app/core/deps.py). It takes the
+  client id the caller already holds and asks the scope
+  [PERF-10](../performance/PERFORMANCE_BUGS.md#perf-10) builds — narrowed to that id — as a
+  single `EXISTS`, instead of loading the `Client` to read `managerId` off it. The rule
+  itself is still written in one place: the new guard narrows `accessible_client_ids`
+  rather than restating its predicate.
+- **Five handlers stop following a relationship.** The four `/api/instances/{id}*`
+  endpoints pass `instance.clientId`, which they had all along; `PATCH /api/alerts/{id}/resolve`
+  fetches its alert with `joinedload(Alert.instance)` and passes `alert.instance.clientId`,
+  so the hop it genuinely needed rides inside the query that was already running and the
+  second hop is gone. `POST /api/instances` and the four `/api/clients/{id}/*` endpoints
+  keep `assert_client_access` on purpose — they load the client for their own reasons, so
+  for them the comparison really is free.
+- **A statement off every single-object request an `ADMIN` makes, and two off `resolve`.**
+  Measured against a `git worktree` of the parent commit: `GET /api/instances/1` falls from
+  **3 statements to 2**, `PATCH /{id}/status` and `DELETE /{id}` from **5 to 4**, the
+  diagnosis endpoint from **4 to 3**, and `PATCH /api/alerts/{id}/resolve` from **6 to 4**.
+  The lazy loads fed a check an `ADMIN` skips, so an `ADMIN` now issues none of them.
+- **A `CLIENT_MANAGER` trades a row for a boolean.** On the instance endpoints the count is
+  unchanged — one lazy load out, one `EXISTS` in — but what runs is
+  `SELECT EXISTS (SELECT clients_1.id … WHERE managerId = ? AND id = ?)` in place of a full
+  `clients` row fetched and hydrated into the session. On the alert path the count drops
+  too, **6 to 5**, because the two chained loads become one `EXISTS`. Every access is a
+  primary-key seek before and after.
+- **The `403` before `404` order is untouched.** Folding the scope into the instance lookup
+  would have removed the manager's remaining statement and turned every out-of-scope `403`
+  into a `404`, which
+  [../business-rules/AUTHORIZATION.md § 3](../business-rules/AUTHORIZATION.md#3-403-rather-than-404)
+  decides against on purpose.
+
+### Added
+
+- **`test_a_manager_with_no_clients_reaches_no_single_instance`** in
+  [../../tests/test_instances.py](../../tests/test_instances.py) and
+  **`test_a_manager_with_no_clients_resolves_nothing`** in
+  [../../tests/test_alerts.py](../../tests/test_alerts.py), recorded together as **TC-X-09**
+  (and as TC-INST-23 and TC-ALRT-18). They are the single-object counterpart of TC-X-08: a
+  check written as a query has a failure mode a comparison does not, where an empty scope
+  stops meaning *nothing* and starts meaning *everything*. Both assert `403` and that the
+  write did not happen.
+- **`empty_scope_headers`** in [../../tests/conftest.py](../../tests/conftest.py) — the
+  manager with no clients, previously registered inline by TC-X-08's test, is now a fixture
+  the three tests share.
+
+### Documentation
+
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-11 marked
+  **Fixed**, with what landed, the before/after statement counts for both roles, the plans
+  for every statement of the alert path, why two call sites keep the old guard, and what
+  the `403`-before-`404` decision still costs. The measurement section records how the
+  write endpoints were counted, and step 8c of the suggested order is done.
+- [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md) — § 2.2 now
+  describes two guards for one rule, which endpoint uses which and why, and extends the
+  empty-scope guarantee of § 2.1 to single objects.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — stop 32b for the new
+  guard, stop 83 for the new fixture, and the line references corrected in the stages that
+  cite the two controllers.
+- [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md),
+  [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md),
+  [../security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md) — the request-flow diagram
+  lists all three guards, the diagnosis flow names the one it uses, and SEC-06's line
+  anchors follow the code.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md),
+  [../testing/TEST_CASES.md](../testing/TEST_CASES.md),
+  [../performance/README.md](../performance/README.md) and the test counts in
+  [../../README.md](../../README.md) and [../../CLAUDE.md](../../CLAUDE.md) — the two new
+  cases, TC-X-09, 11 of 15 findings fixed, 125 → 127.
 
 ---
 
