@@ -106,6 +106,16 @@ Details worth knowing:
 - `forecastMonth` rolls the year correctly in December (`2026-12` → `2027-01`).
 - A client with no RUNNING instances returns `forecastCost: 0.0` and an empty
   `breakdown`, not an error.
+- **The counting happens in SQL.** Unlike §3, this response carries no instance field —
+  only counts and subtotals — so there is nothing to load the rows for. The query is a
+  `GROUP BY instanceType` returning at most three `(type, count)` rows, whatever the
+  client's size ([../performance/PERFORMANCE_BUGS.md § PERF-12](../performance/PERFORMANCE_BUGS.md#perf-12)).
+  This is the same argument §3 makes in the other direction: aggregate in SQL when the
+  rows are not in the response, load them when they are.
+- `breakdown` keys come back in type order — `LARGE`, `MEDIUM`, `SMALL` — because the
+  grouping query orders by the column it groups on. No caller should depend on that; the
+  breakdown is a map keyed by type, and the order of a JSON object's keys is not part of
+  the contract.
 
 The forecast is a straight-line projection. It does not model growth, seasonality, or
 planned changes, and it assumes the current mix holds for the whole of next month.

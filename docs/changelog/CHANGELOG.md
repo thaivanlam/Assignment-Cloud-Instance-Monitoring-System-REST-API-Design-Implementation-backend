@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-05](#2026-09-05--perf-12-fixed-the-cost-forecast-counts-in-sql) | PERF-12 fixed | The forecast counts running instances with a `GROUP BY` instead of loading every one of them |
 | [2026-09-05](#2026-09-05--perf-11-fixed-the-single-object-guard-stops-loading-the-client) | PERF-11 fixed | A single-object endpoint no longer fetches a whole `clients` row to compare one integer |
 | [2026-09-05](#2026-09-05--perf-10-fixed-a-managers-scope-rides-inside-the-query) | PERF-10 fixed | A `CLIENT_MANAGER` request no longer runs a query just to find out which clients they manage |
 | [2026-09-01](#2026-09-01--requirements-test-cases-and-a-user-manual) | Requirements, test cases and a user manual | BRD, SRS, FRS, use cases and user stories; a test case specification; an end-user manual |
@@ -44,6 +45,84 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-05 — PERF-12 fixed: the cost forecast counts in SQL
+
+The twelfth of the fifteen performance findings closed, and the last of the five rated
+medium. No behaviour changed: every field of every forecast is what it was. 128 tests pass
+— the 127 that existed, unchanged, plus one new one.
+
+### Fixed
+
+- **`GET /api/clients/{id}/cost-forecast` counts by type in the database.**
+  `get_cost_forecast` in [../../app/services/client_service.py](../../app/services/client_service.py)
+  loaded every RUNNING instance of a client as a full ORM object and then read nothing off
+  those objects except their type. The response has never contained an instance field —
+  only counts, unit prices and subtotals — so the query is now
+  `GROUP BY instanceType` returning `(type, count)`. There are three instance types, so it
+  returns at most three rows however large the client is.
+- **The arithmetic is untouched.** A subtotal is still `round(count × unitPrice, 2)` and
+  the total still `round(Σ subtotals, 2)`; `runningInstanceCount`, formerly `len(running)`,
+  is the sum of the group counts. Same numbers, and no figure can drift by a cent.
+- **A request that stops growing with the client.** Measured with the pre-fix function
+  restored as a monkeypatch, so both halves run on one seed in one process: at **3,002**
+  running instances the request falls from **27.3 ms to 5.3 ms** and its peak allocation
+  from **6.0 MB to 79 KiB**; at 702 it is halved. The statement count does not move — three
+  before, three after — because this finding was never about how many statements run but
+  about what one of them carries back.
+- **On the seeded database it buys nothing, and that is recorded rather than hidden.** At
+  the seed's two running instances the fixed form is a fraction of a millisecond *slower*
+  (4.63 ms → 4.72 ms): `instanceType` is not indexed, so the `GROUP BY` adds a
+  `USE TEMP B-TREE` step that costs more than hydrating two objects. It is a scale fix. An
+  index on `instanceType` would remove that step and was rejected — one endpoint would use
+  it, over a column with three distinct values.
+- **`get_client_cost` and `get_sla` still aggregate in Python, on purpose.** Both embed a
+  row per instance in their response, so their rows have to be loaded anyway. The
+  `func.sum()` the finding floats for `totalMonthlyCost` was **not** taken: it would add a
+  statement to save a loop over a list that is already in memory.
+
+### Changed
+
+- **`breakdown` keys come back in type order** — `LARGE`, `MEDIUM`, `SMALL` — where they
+  used to follow first appearance by instance id. The query orders by the column it groups
+  on, which costs nothing on a temp B-tree that is already sorted, and makes the order a
+  property of the statement rather than of the rows' ids.
+  [../business-rules/COST.md § 4](../business-rules/COST.md#4-next-month-forecast--get-apiclientsidcost-forecast)
+  records it, and that no caller should depend on it: `breakdown` is a map keyed by type,
+  and the key order of a JSON object is not part of the contract. No documented example
+  moves — every one of them shows a single type.
+
+### Added
+
+- **`test_forecast_groups_all_three_types_of_one_client`** in
+  [../../tests/test_clients.py](../../tests/test_clients.py), recorded as **TC-CLNT-23**.
+  The three existing forecast cases pin one type, two types and none; this one pins all
+  three at once with counts that differ, and the client filter with them — VN FinTech runs
+  two LARGE instances of its own, so a grouping that lost the `clientId` filter would read
+  a LARGE count of 4 rather than 2. It passes on both sides of the change, which is what a
+  test pinning behaviour through a rewrite is for.
+
+### Documentation
+
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-12 marked
+  **Fixed**, with what landed, the rows-fetched and peak-allocation table, the plans either
+  side of the change, the latency at three sizes including the row where the fix loses, and
+  why the two sibling functions were left alone. The measurement section records the
+  interleaved paired runs, and the suggested order of work gains step 10.
+- [../business-rules/COST.md](../business-rules/COST.md) — § 4 says the counting happens in
+  SQL and why, against § 3 which loads its rows because every one of them reaches the
+  response, plus the `breakdown` key order.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — stop 68 now reads
+  against stop 67 as the aggregate-in-SQL-or-not pair, and stop 69's line reference follows
+  the code.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md),
+  [../testing/TEST_CASES.md](../testing/TEST_CASES.md),
+  [../requirements/USE_CASES.md](../requirements/USE_CASES.md),
+  [../performance/README.md](../performance/README.md) and the test counts in
+  [../../README.md](../../README.md) and [../../CLAUDE.md](../../CLAUDE.md) — the new case,
+  TC-CLNT-23, 12 of 15 findings fixed, 127 → 128.
 
 ---
 

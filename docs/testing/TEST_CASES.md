@@ -4,7 +4,7 @@
 |---|---|
 | System | TechValley Cloud Instance Monitoring System |
 | Document | Test Case specification |
-| Status | Baseline — matches the 127-case automated suite |
+| Status | Baseline — matches the 128-case automated suite |
 | Last reviewed | 2026-09-01 |
 
 The test scenarios, conditions and data used to check the system for defects — each with
@@ -228,6 +228,7 @@ Column meanings: **Steps / data** is the call to make; **Expected** is the exact
 | **TC-CLNT-20** | P2 | A client with no instances | `GET /api/clients/{id}/sla` | `uptimePercent` = `100.0`, `isViolation` = `false`, empty `instanceDetails` — not `0%` | `sla_of_a_client_without_instances_is_not_a_violation` |
 | **TC-CLNT-21** | P2 | Any client with instances | Recompute `runningHours / measuredHours` from `instanceDetails` | Each equals the reported per-instance `uptimePercent` (3 decimals), and their mean equals the client figure — the response is auditable | `sla_flags_a_violation_for_a_long_stopped_instance` |
 | **TC-CLNT-22** | P3 | An instance launched earlier today | Read its client's SLA | `measuredHours` counts from `launchedAt`, not from the first of the month | **Manual** — depends on wall-clock time; see [§ 8](#8-what-these-cases-do-not-check) |
+| **TC-CLNT-23** | P2 | Client 1 with instance 3 started and a SMALL registered — 2 LARGE, 1 MEDIUM, 1 SMALL running; client 6 runs 2 LARGE of its own | `GET /api/clients/1/cost-forecast` | `runningInstanceCount` = `4`; `forecastCost` = `670.0`; `breakdown` carries all three types with `LARGE` at **2**, not 4 — the count is grouped and filtered in the same statement ([PERFORMANCE_BUGS § PERF-12](../performance/PERFORMANCE_BUGS.md#perf-12)) | `forecast_groups_all_three_types_of_one_client` |
 
 ### 4.6 Diagnosis — TC-DIAG
 
@@ -272,7 +273,7 @@ database is freshly seeded.
 
 1. Every P1 case passes. A P1 failure is a release blocker.
 2. Every P2 case passes, or the failure is recorded as a known defect with a decision.
-3. `pytest -q` reports **127 passed**.
+3. `pytest -q` reports **128 passed**.
 4. Any case whose expected value the change moved has been updated **in the same commit**,
    along with [../demo/SEED_DATA.md](../demo/SEED_DATA.md) and
    [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if the numbers there moved
@@ -331,7 +332,7 @@ Requirement → the cases that verify it. Business-level traceability continues 
 | FR-04 Instance lifecycle | F-INST-04, F-INST-05 | TC-INST-15 … TC-INST-23 |
 | FR-05 Detection and reporting | F-MON-01 … F-MON-04 | TC-MON-01 … TC-MON-15 |
 | FR-06 Alert lifecycle | F-ALRT-01, F-ALRT-02 | TC-ALRT-01 … TC-ALRT-18 |
-| FR-07 Cost and forecast | F-CLNT-04, F-CLNT-05 | TC-CLNT-11 … TC-CLNT-17 |
+| FR-07 Cost and forecast | F-CLNT-04, F-CLNT-05 | TC-CLNT-11 … TC-CLNT-17, TC-CLNT-23 |
 | FR-08 SLA reporting | F-CLNT-06 | TC-CLNT-18 … TC-CLNT-22 |
 | FR-09 Diagnosis | F-DIAG-01 | TC-DIAG-01 … TC-DIAG-08 |
 | FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-09 |

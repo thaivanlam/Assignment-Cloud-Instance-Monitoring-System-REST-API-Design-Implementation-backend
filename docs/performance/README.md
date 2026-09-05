@@ -5,14 +5,14 @@ it would take to fix.
 
 | Document | Contents |
 |---|---|
-| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 11 of 15 so far; a suggested order of work; the measurement method |
+| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 12 of 15 so far; a suggested order of work; the measurement method |
 
 ## The short version
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 tests pass and the API returns correct answers throughout. Three findings are rated
-critical, and all three are now fixed, as are all four high-severity ones and the first
-four medium:
+critical, and all three are now fixed, as are all four high-severity ones and all five
+medium:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -94,20 +94,32 @@ four medium:
   check an `ADMIN` skips — and `resolve_alert` loses two; a `CLIENT_MANAGER` trades a
   fetched-and-hydrated row for a boolean, and loses one on the alert path
   ([../business-rules/AUTHORIZATION.md § 2.2](../business-rules/AUTHORIZATION.md#22-single-resource-endpoints--check-after-load)).
+- **PERF-12** — *fixed.* `GET /api/clients/{id}/cost-forecast` loaded every RUNNING
+  instance of a client as a full ORM object in order to count them by type, and the
+  response contains no instance field at all — only counts and subtotals. It is now a
+  `GROUP BY instanceType`, which returns at most three rows however large the client is.
+  The statement count is unchanged, because the finding was never about how many
+  statements run: at 3,002 running instances the request falls from 27.3 ms to 5.3 ms and
+  its peak allocation from 6.0 MB to 79 KiB, while at the seed's two instances it is a
+  fraction of a millisecond *slower* — a `GROUP BY` on an unindexed column costs a temp
+  B-tree. `get_client_cost` and `get_sla` keep aggregating in Python on purpose; both
+  embed a row per instance in their response, so their rows have to be loaded anyway
+  ([../business-rules/COST.md § 4](../business-rules/COST.md#4-next-month-forecast--get-apiclientsidcost-forecast)).
 
-With PERF-05, PERF-06 and PERF-07 closed, neither a monitoring scan's statement count nor
-any list endpoint's response grows with the result set. The remaining four findings are
-smaller: aggregation done in Python (**PERF-12**), a client rebuilt per LLM request
-(**PERF-14**), startup work repeated on every boot (**PERF-15**) — and one recorded
-deliberately rather than as a defect, the login KDF cost (**PERF-13**), which is correct as
-written and should not be changed.
+With PERF-05, PERF-06, PERF-07 and PERF-12 closed, nothing in the API grows with the size
+of what it is asked about: not a monitoring scan's statement count, not a list endpoint's
+response, and not the forecast's result set. The remaining three findings are smaller: a
+client rebuilt per LLM request (**PERF-14**), startup work repeated on every boot
+(**PERF-15**) — and one recorded deliberately rather than as a defect, the login KDF cost
+(**PERF-13**), which is correct as written and should not be changed.
 
 Every figure is measured against the seeded demo database — or, where the seed is too
 small to show a difference, against that database grown with several thousand extra
 instances — not estimated; the method is at the end of the document so any number can be
-reproduced. Eleven findings, PERF-01 through PERF-11, have been fixed; the rest are
-recorded and still open. PERF-09 is the one whose payoff is a wall-clock number rather than a
-statement count — it removes work from inside a query without changing how many run.
+reproduced. Twelve findings, PERF-01 through PERF-12, have been fixed; the rest are
+recorded and still open. PERF-09 and PERF-12 are the two whose payoff is a wall-clock
+number rather than a statement count — both change what a query does rather than how many
+run.
 
 ## Related
 

@@ -596,7 +596,7 @@ story to its criteria.
 | UC-07, UC-08, UC-09 | US-12, US-13, US-14, US-15 | BR-07, BR-09 | F-MON-01…03 | [TC-MON-01…09](../testing/TEST_CASES.md#43-monitoring--tc-mon) |
 | UC-10 | US-18 | BR-10 | F-MON-04 | [TC-MON-10…12](../testing/TEST_CASES.md#43-monitoring--tc-mon) |
 | UC-11 | US-16, US-17 | BR-08 | F-ALRT-01, F-ALRT-02 | [TC-ALRT-*](../testing/TEST_CASES.md#44-alerts--tc-alrt) |
-| UC-12, UC-13 | US-19, US-20, US-21 | BR-11, BR-12 | F-CLNT-04, F-CLNT-05 | [TC-CLNT-11…17](../testing/TEST_CASES.md#45-clients-cost-and-sla--tc-clnt) |
+| UC-12, UC-13 | US-19, US-20, US-21 | BR-11, BR-12 | F-CLNT-04, F-CLNT-05 | [TC-CLNT-11…17, 23](../testing/TEST_CASES.md#45-clients-cost-and-sla--tc-clnt) |
 | UC-14 | US-22, US-23 | BR-13 | F-CLNT-06 | [TC-CLNT-18…21](../testing/TEST_CASES.md#45-clients-cost-and-sla--tc-clnt) |
 | UC-15 | US-24, US-25, US-26 | BR-16, BR-17 | F-DIAG-01 | [TC-DIAG-*](../testing/TEST_CASES.md#46-diagnosis--tc-diag) |
 

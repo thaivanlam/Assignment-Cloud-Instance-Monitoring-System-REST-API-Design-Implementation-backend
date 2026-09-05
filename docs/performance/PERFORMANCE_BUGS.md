@@ -1,13 +1,13 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Eleven — [PERF-01](#perf-01)
-through [PERF-11](#perf-11) — have since been fixed; the **Status** column below says
+findings, ranked by the load at which they start to hurt. Twelve — [PERF-01](#perf-01)
+through [PERF-12](#perf-12) — have since been fixed; the **Status** column below says
 which are still open.
 
 Nothing here is a functional bug — every one of the tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
-returning them *at all* under concurrency. (The suite has grown from 104 cases to 127
+returning them *at all* under concurrency. (The suite has grown from 104 cases to 128
 across these fixes; each finding below quotes the count at the time it landed.)
 
 **Every number below was measured**, not estimated. The method is in
@@ -31,7 +31,7 @@ challenged.
 | [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | **Fixed** |
 | [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | **Fixed** |
 | [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | **Fixed** |
-| [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium | Open |
+| [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium | **Fixed** |
 | [PERF-13](#perf-13) | PBKDF2 at 260,000 iterations dominates the login path | `core/security.py` | Low (by design) | Won't fix |
 | [PERF-14](#perf-14) | A new Anthropic HTTP client is built per diagnosis request | `services/llm_service.py` | Low | Open |
 | [PERF-15](#perf-15) | `create_all` and the seed probe run on every startup | `main.py`, `seed.py` | Low | Open |
@@ -1354,6 +1354,7 @@ cheapest form of it.
 ### PERF-12
 
 **Aggregates are computed in Python over fully loaded rows.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-11) at the end of this finding.
 
 `get_cost_forecast` ([client_service.py:104](../../app/services/client_service.py#L104))
 loads every `RUNNING` instance of a client as a full ORM object, then does nothing with
@@ -1368,6 +1369,128 @@ Python, but the win is small.
 
 **Fix.** Aggregate in SQL wherever the loaded rows do not appear in the response —
 `get_cost_forecast` is the only clear case.
+
+#### The fix that landed
+
+Exactly the shape proposed, in `get_cost_forecast` and nowhere else
+([client_service.py:104](../../app/services/client_service.py#L104)):
+
+```python
+counts = (
+    db.query(Instance.instanceType, func.count(Instance.id))
+    .filter(Instance.clientId == client_id, Instance.status == InstanceStatus.RUNNING)
+    .group_by(Instance.instanceType)
+    .order_by(Instance.instanceType)
+    .all()
+)
+
+breakdown: dict[str, dict] = {}
+for instance_type, count in counts:
+    t = instance_type.value
+    breakdown[t] = {
+        "count": count,
+        "unitPrice": UNIT_PRICES[t],
+        "subtotal": round(count * UNIT_PRICES[t], 2),
+    }
+```
+
+The loop is what the old one was, minus the counting: it turns each group
+into its `breakdown` entry rather than incrementing one row at a time.
+`runningInstanceCount`, which was `len(running)`, is now the sum of those counts — the
+same number, from the rows that are left. The arithmetic is untouched, including where it
+rounds: a subtotal is still `round(count × unitPrice, 2)` and the total still
+`round(Σ subtotals, 2)`, so no figure can drift by a cent.
+
+Three details are deliberate.
+
+- **`order_by` beside the `group_by`.** Grouping on an unindexed column already builds a
+  temp B-tree sorted by that column, so ordering by the same column is free, and it makes
+  the key order of `breakdown` a property of the query rather than of whatever order
+  SQLite happens to return groups in. The order *did* change — it was first appearance by
+  instance id, it is now type order — and
+  [../business-rules/COST.md § 4](../business-rules/COST.md#4-next-month-forecast--get-apiclientsidcost-forecast)
+  now says so, along with the fact that no caller should depend on it.
+- **`func.count(Instance.id)`, not `count(*)`.** `id` is `NOT NULL` and the primary key,
+  so the two count the same rows; naming the column says which rows are being counted and
+  survives the query growing a join later.
+- **Nothing else changed.** `get_client_cost` and `get_sla` still aggregate in Python, as
+  the finding says they legitimately must — both embed a row per instance in the response.
+  The `func.sum()` the finding floats for `get_client_cost`'s `totalMonthlyCost` was
+  **not** taken: the rows are already loaded for `costByInstance`, so summing in SQL would
+  *add* a statement to save a Python loop over a list that is already in memory. The
+  finding is about loading rows **only** to aggregate them, and that describes one
+  function.
+
+##### Measured — statements, rows and allocation
+
+One process, one seed, the pre-fix `get_cost_forecast` restored as a monkeypatch for one
+half of each pair, so both columns are measured rather than one being remembered
+([§ How these were measured](#how-these-were-measured)). `GET /api/clients/1/cost-forecast`
+as an `ADMIN`:
+
+| RUNNING instances of client 1 | Rows fetched before | after | Peak allocation before | after |
+|---|---|---|---|---|
+| 2 (the seed) | 2 | **1** | 80.8 KiB | **78.6 KiB** |
+| 702 | 702 | **3** | 1.4 MB | **79.1 KiB** |
+| 3,002 | 3,002 | **3** | 6.0 MB | **78.6 KiB** |
+
+**The statement count does not move** — three either way, and the third is the forecast
+query in both. That is the point of this finding: it is not about how many statements run
+but about what one of them carries back. Before, the answer cost one ORM object per
+RUNNING instance, hydrated into the session's identity map to be looked at once. After, it
+costs at most three rows of two integers, because there are only three instance types. The
+peak-allocation column is the same fact in bytes, and it stops growing with the client.
+
+##### Measured — the plans and the latency
+
+```
+before   SEARCH instances USING INDEX ix_instances_clientId_status (clientId=? AND status=?)
+after    SEARCH instances USING INDEX ix_instances_clientId_status (clientId=? AND status=?)
+         USE TEMP B-TREE FOR GROUP BY
+```
+
+The fix *adds* a plan step. `instanceType` is not indexed — [PERF-04](#perf-04) indexed
+what the API filters and sorts on, and nothing groups by type except this endpoint — so
+SQLite sorts the matched rows through a temp B-tree to group them. That is work the old
+form did not do, and it is still overwhelmingly the cheaper shape, because the rows it
+sorts never leave the database:
+
+| RUNNING instances of client 1 | Before | After |
+|---|---|---|
+| 2 (the seed) | 4.63 ms | 4.72 ms |
+| 702 | 9.90 ms | **4.80 ms** |
+| 3,002 | 27.27 ms | **5.33 ms** |
+
+Median of 200 paired requests per size, the two variants interleaved so any drift lands on
+both. At the seed's two instances the fix is a fraction of a millisecond *slower* — the
+temp B-tree costs more than hydrating two objects — and that is the honest reading of the
+first row: on the demo database this finding buys nothing. It is a scale fix. By 702
+instances the request is halved, by 3,002 it is a fifth, and the after column is nearly
+flat where the before column grows with the client. An index on `instanceType` would
+remove the B-tree, and is not worth adding: it would exist for one endpoint, and the
+column has three distinct values, so it would be poorly selective for anything else.
+
+##### Verification
+
+All 128 functional tests pass — the 127 that existed, unchanged, plus one added here. The
+three forecast cases already pinned the endpoint's answers exactly
+(`forecast_counts_only_running_instances`, `forecast_reacts_to_a_status_change`,
+`forecast_of_a_client_without_running_instances_is_zero`), including the empty breakdown,
+which is the case a `GROUP BY` returning no rows has to keep answering with `0.0` rather
+than an error.
+
+The one added, `forecast_groups_all_three_types_of_one_client` in
+[tests/test_clients.py](../../tests/test_clients.py), covers what none of them did: all
+three types present at once, with counts that differ. It starts VinaSoft's STOPPED MEDIUM
+and registers a SMALL beside its two RUNNING LARGE, then asserts the whole `breakdown` and
+a `forecastCost` of `670.0`. Its second job is the `clientId` filter — VN FinTech runs two
+LARGE instances of its own, so a grouping that lost the client filter would read a LARGE
+count of 4 rather than 2. It passes on both sides of this change, which is what a test
+pinning behaviour through a rewrite is for.
+
+Beyond the suite, the measurement script above compared the full response body across the
+two variants at every size before reporting any figure — identical each time, `breakdown`
+included.
 
 ---
 
@@ -1445,6 +1568,7 @@ Ordered by benefit per unit of risk, not by severity.
 | 8b | Scope filter as a subquery | [PERF-10](#perf-10) | Medium — **done** |
 | 8c | Drop the lazy loads | [PERF-11](#perf-11) | Medium — **done** |
 | 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract — **done** |
+| 10 | Count the forecast in SQL | [PERF-12](#perf-12) | Low — one function, same answer — **done** |
 
 Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
 touched a rule documented in [../business-rules/ALERTING.md](../business-rules/ALERTING.md)
@@ -1467,6 +1591,12 @@ authorized and touches none of them, and neither needs the other. Both are done,
 order, and 8b removed the thing 8c had originally planned to lean on — it was taken
 second, so it was rewritten against what 8b left rather than against what the finding
 first proposed. See [PERF-11](#perf-11).
+
+Step 10 was not in the original order at all — [PERF-12](#perf-12) was left unranked
+because its payoff on the seeded database is nothing. It was taken after 8c anyway, on the
+grounds that it is the cheapest change in the list: one function, no signature moved, no
+documented answer moved, and the only finding left whose cost grows without bound with a
+client's size.
 
 ---
 
@@ -1545,6 +1675,21 @@ compared on status code and response body before any count is reported — ident
 the two checkouts for all ten, apart from the seed-relative timestamps that necessarily
 differ between two runs, and the diagnosis text, for which the working tree's `.env` was
 withheld so both halves took the rule-based fallback rather than the provider.
+
+The before/after figures under [PERF-12](#perf-12) come from that listener with the
+pre-fix `get_cost_forecast` — the load-and-count loop, restored as a monkeypatch — swapped
+in for one half of each pair, so both columns are measured in the same process on the same
+seed. A monkeypatch suffices where [PERF-10](#perf-10) and [PERF-11](#perf-11) needed two
+checkouts, because the change is contained in one function body and moves no signature.
+The rows-fetched column is the number of rows the forecast statement returns — for the
+fixed form the number of distinct RUNNING types, for the old one the number of RUNNING
+instances; peak allocation is `tracemalloc.get_traced_memory()` around one already-warmed
+request, as [PERF-07](#perf-07)'s was. The latency table is the median of 200 paired
+requests per size with the two variants interleaved — alternating rather than run in
+blocks, so any drift in the machine lands on both columns — after 20 warm-up requests
+each. The scale rows bulk-insert 700 or 3,000 additional RUNNING instances against client
+1, cycling SMALL, MEDIUM and LARGE so all three groups are populated. Every paired run
+asserts an identical response body, `breakdown` included, before any figure is reported.
 
 The before/after plans and latencies under [PERF-09](#perf-09) come from that listener
 again, with the pre-fix `list_alerts` — the unconditional join, restored as a monkeypatch —
