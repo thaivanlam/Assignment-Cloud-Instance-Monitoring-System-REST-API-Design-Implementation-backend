@@ -102,7 +102,7 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-127 cases across six files. Each file covers one area of the API.
+128 cases across six files. Each file covers one area of the API.
 
 ### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
 
@@ -200,7 +200,7 @@ set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.
 
-### 4.5 `test_clients.py` — clients, cost and SLA (26 cases)
+### 4.5 `test_clients.py` — clients, cost and SLA (27 cases)
 
 | Case | Pins |
 |---|---|
@@ -222,6 +222,7 @@ Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 | `forecast_counts_only_running_instances` | `$500`, breakdown by type, STOPPED excluded |
 | `forecast_reacts_to_a_status_change` | Starting the STOPPED instance moves the forecast to `$620` |
 | `forecast_of_a_client_without_running_instances_is_zero` | `0.0` with an empty breakdown |
+| `forecast_groups_all_three_types_of_one_client` | All three types at once with counts that differ, and another client's LARGE instances left out of the LARGE count. The grouping happens in SQL ([../performance/PERFORMANCE_BUGS.md § PERF-12](../performance/PERFORMANCE_BUGS.md#perf-12)), so both the grouping key and the client filter live in the same statement |
 | `sla_reports_full_uptime_when_every_instance_is_running` | `100.0%`, `isViolation: false`, threshold `99.0` for STANDARD |
 | `sla_flags_a_violation_for_a_long_stopped_instance` | Threshold `95.0` for BASIC, violation flagged, per-instance detail consistent |
 | `sla_of_a_client_without_instances_is_not_a_violation` | Empty client is `100.0%`, not `0%` |

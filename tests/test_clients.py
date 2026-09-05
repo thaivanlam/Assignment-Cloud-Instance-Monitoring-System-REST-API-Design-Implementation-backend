@@ -303,6 +303,42 @@ def test_forecast_reacts_to_a_status_change(api, auth_headers):
     assert body["breakdown"]["MEDIUM"] == {"count": 1, "unitPrice": 120.0, "subtotal": 120.0}
 
 
+def test_forecast_groups_all_three_types_of_one_client(api, auth_headers):
+    client, _ = api
+
+    # VinaSoft runs 2 LARGE. Start its STOPPED MEDIUM and register a SMALL, so all
+    # three types appear at once with counts that differ from each other.
+    client.patch(
+        "/api/instances/3/status",
+        headers=auth_headers["manager1"],
+        json={"status": "RUNNING", "cpuUsage": 10.0},
+    )
+    client.post(
+        "/api/instances",
+        headers=auth_headers["manager1"],
+        json={
+            "instanceName": "vinasoft-cache-01",
+            "region": "ap-southeast-1",
+            "instanceType": "SMALL",
+            "clientId": 1,
+        },
+    )
+
+    response = client.get("/api/clients/1/cost-forecast", headers=auth_headers["manager1"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runningInstanceCount"] == 4
+    assert body["forecastCost"] == 670.0
+    # VN FinTech (client 6) runs 2 LARGE instances of its own, so a count that lost the
+    # client filter would read 4 here. Every subtotal is a count of one client's rows.
+    assert body["breakdown"] == {
+        "SMALL": {"count": 1, "unitPrice": 50.0, "subtotal": 50.0},
+        "MEDIUM": {"count": 1, "unitPrice": 120.0, "subtotal": 120.0},
+        "LARGE": {"count": 2, "unitPrice": 250.0, "subtotal": 500.0},
+    }
+
+
 def test_forecast_of_a_client_without_running_instances_is_zero(api, auth_headers):
     client, _ = api
 
