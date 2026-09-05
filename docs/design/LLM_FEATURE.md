@@ -38,7 +38,7 @@ GET /api/instances/{id}/diagnosis
         ▼
 instance_controller.diagnose_instance()
         │  1. load instance (404 if missing)
-        │  2. assert_client_access(member, instance.client)   ← JWT + role scoping
+        │  2. assert_client_id_access(db, member, instance.clientId) ← JWT + role scoping
         │  3. load 10 most recent alerts (ORDER BY detectedAt DESC)
         │  4. db.close()  ← release the pooled connection before the network call
         ▼
@@ -339,8 +339,11 @@ field makes the difference auditable.
 The endpoint sits behind the same guards as the rest of the API:
 
 - `Depends(get_current_member)` — a valid HS256 JWT is required.
-- `assert_client_access(member, instance.client)` — an `ADMIN` may diagnose any
-  instance; a `CLIENT_MANAGER` only instances belonging to clients they manage.
+- `assert_client_id_access(db, member, instance.clientId)` — an `ADMIN` may diagnose any
+  instance; a `CLIENT_MANAGER` only instances belonging to clients they manage. The check
+  is one `EXISTS` against the caller's scope, so it does not load the client
+  ([../performance/PERFORMANCE_BUGS.md § PERF-11](../performance/PERFORMANCE_BUGS.md#perf-11)),
+  and it runs *before* the `db.close()` below.
 - Only instance metadata and alert messages leave the process; member identities,
   client contact details, and credentials are never included in the prompt.
 

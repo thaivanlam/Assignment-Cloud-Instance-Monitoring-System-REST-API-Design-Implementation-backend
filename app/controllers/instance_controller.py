@@ -1,7 +1,12 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.deps import accessible_client_ids, assert_client_access, get_current_member
+from app.core.deps import (
+    accessible_client_ids,
+    assert_client_access,
+    assert_client_id_access,
+    get_current_member,
+)
 from app.database import get_db
 from app.models import Alert, InstanceStatus, InstanceType, Member
 from app.pagination import DEFAULT_SIZE, PageParam, SizeParam
@@ -61,7 +66,7 @@ def get_instance(
     member: Member = Depends(get_current_member),
 ):
     instance = instance_service.get_instance(db, instance_id)
-    assert_client_access(member, instance.client)
+    assert_client_id_access(db, member, instance.clientId)
     return instance
 
 
@@ -77,7 +82,7 @@ def update_status(
     member: Member = Depends(get_current_member),
 ):
     instance = instance_service.get_instance(db, instance_id)
-    assert_client_access(member, instance.client)
+    assert_client_id_access(db, member, instance.clientId)
     return instance_service.update_status(db, instance_id, body)
 
 
@@ -92,7 +97,7 @@ def delete_instance(
     member: Member = Depends(get_current_member),
 ):
     instance = instance_service.get_instance(db, instance_id)
-    assert_client_access(member, instance.client)
+    assert_client_id_access(db, member, instance.clientId)
     instance_service.delete_instance(db, instance_id)
 
 
@@ -107,7 +112,7 @@ def diagnose_instance(
     member: Member = Depends(get_current_member),
 ):
     instance = instance_service.get_instance(db, instance_id)
-    assert_client_access(member, instance.client)
+    assert_client_id_access(db, member, instance.clientId)
 
     alerts = (
         db.query(Alert)

@@ -184,6 +184,27 @@ def test_resolving_another_managers_alert_is_forbidden(scanned, auth_headers):
     assert target.isResolved is False
 
 
+def test_a_manager_with_no_clients_resolves_nothing(scanned, empty_scope_headers):
+    """The alert guard reaches a client through two hops, and an empty scope must stop it.
+
+    `resolve_alert` gets the alert's `clientId` off the instance the alert query already
+    loaded and checks it against the caller's scope, where it used to walk
+    `alert.instance.client` (docs/performance/PERFORMANCE_BUGS.md § PERF-11). A manager
+    with no clients owns no instance either, so every alert in the table is out of reach.
+    """
+    client, db = scanned
+    target = db.query(Alert).filter(Alert.instanceId == 1).one()
+
+    response = client.patch(f"/api/alerts/{target.id}/resolve", headers=empty_scope_headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "CLIENT_MANAGER can only access clients assigned to them"
+    )
+    db.refresh(target)
+    assert target.isResolved is False
+
+
 def test_resolving_an_unknown_alert_is_404(api, auth_headers):
     client, _ = api
 

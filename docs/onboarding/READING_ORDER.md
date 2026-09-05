@@ -168,7 +168,7 @@ here and produces `422`. Validation that needs the database lives in a service a
 
 ## Stage 3 — Authentication and role scoping
 
-This is the stage where reading order matters most: `assert_client_access` is called by
+This is the stage where reading order matters most: the single-object guard is called by
 ten endpoints, and none of them make sense until you have read it.
 
 ### 3.1 `app/core/exceptions.py` — the four domain exceptions
@@ -208,8 +208,8 @@ Everything after it is the same shape with more layers.
 
 ### 3.4 `app/core/deps.py` — the heart of the authorization model
 
-[app/core/deps.py](../../app/core/deps.py). Read all four in file order; they build on each
-other.
+[app/core/deps.py](../../app/core/deps.py). Read all four stops in file order; they build
+on each other.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
@@ -217,6 +217,7 @@ other.
 | 30 | `require_admin` | [deps.py:37](../../app/core/deps.py#L37) | Depends on the previous one and adds a role check. Used by exactly one endpoint: `POST /api/clients`. |
 | 31 | `assert_client_access` | [deps.py:43](../../app/core/deps.py#L43) | **The single-object guard.** ADMIN passes; a `CLIENT_MANAGER` passes only if `client.managerId == member.id`. It runs *after* the entity is loaded — so a manager asking for someone else's instance gets `403`, not `404`. |
 | 32 | `accessible_client_ids` | [deps.py:54](../../app/core/deps.py#L54) | **The list guard.** Returns `None` for ADMIN, meaning *no filter*; otherwise a `SELECT` of the manager's client ids. It takes no `Session` — it builds the lookup and the caller's query runs it. |
+| 32b | `assert_client_id_access` | [deps.py:77](../../app/core/deps.py#L77) | **Stop 31 for callers holding only an id** — same rule, same `403`, asked as one `EXISTS` over the scope stop 32 builds instead of loading the client to compare one field. It is last in the file because it is built from 32; read it as a footnote to 31. |
 
 **The `None` convention.** Every service that lists rows takes
 `client_ids: Select[tuple[int]] | None`. `None` means "apply no filter" (ADMIN); a
@@ -232,9 +233,13 @@ that selects nothing, and `IN` over nothing matches nothing. Earlier revisions o
 walkthrough described a `[-1]` sentinel here for exactly that case; it is gone, and
 `test_a_manager_with_no_clients_sees_nothing` guards what it used to.
 
-**Two guards, two situations:** `assert_client_access` for one known object,
-`accessible_client_ids` for a query. Every endpoint uses exactly one of them. The rules in
-full: [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md).
+**Two situations, three guards:** `accessible_client_ids` for a query, and for one known
+object either `assert_client_access` when the row is in hand or `assert_client_id_access`
+when only its `clientId` is. Every endpoint uses exactly one of the three. The second and
+third apply the same rule and differ only in what they are given — an instance handler
+holds `instance.clientId` already, and loading the client to read one integer off it was
+[../performance/PERFORMANCE_BUGS.md § PERF-11](../performance/PERFORMANCE_BUGS.md#perf-11).
+The rules in full: [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md).
 
 ---
 
@@ -264,12 +269,12 @@ Six endpoints; four of them reduce to the same three steps — load, guard, dele
 
 | # | Function | Line | Guard used |
 |---:|---|---|---|
-| 39 | `create_instance` | [instance_controller.py:21](../../app/controllers/instance_controller.py#L21) | `assert_client_access` on the target client — a manager cannot create an instance under someone else's client |
-| 40 | `list_instances` | [instance_controller.py:38](../../app/controllers/instance_controller.py#L38) | `accessible_client_ids`; note `PageParam` / `SizeParam` from Stage 2 bounding the paging, and the tuple unpacked into `PageResponse` — the shape every list endpoint from here on repeats |
-| 41 | `get_instance` | [instance_controller.py:58](../../app/controllers/instance_controller.py#L58) | `assert_client_access(member, instance.client)` |
-| 42 | `update_status` | [instance_controller.py:73](../../app/controllers/instance_controller.py#L73) | same |
-| 43 | `delete_instance` | [instance_controller.py:89](../../app/controllers/instance_controller.py#L89) | same; returns `204` |
-| 44 | `diagnose_instance` | [instance_controller.py:104](../../app/controllers/instance_controller.py#L104) | same; loads the 10 most recent alerts, then calls `db.close()` — the connection goes back to the pool before the provider call, not after it — and then Stage 8 |
+| 39 | `create_instance` | [instance_controller.py:26](../../app/controllers/instance_controller.py#L26) | `assert_client_access` on the target client — a manager cannot create an instance under someone else's client |
+| 40 | `list_instances` | [instance_controller.py:43](../../app/controllers/instance_controller.py#L43) | `accessible_client_ids`; note `PageParam` / `SizeParam` from Stage 2 bounding the paging, and the tuple unpacked into `PageResponse` — the shape every list endpoint from here on repeats |
+| 41 | `get_instance` | [instance_controller.py:63](../../app/controllers/instance_controller.py#L63) | `assert_client_id_access(db, member, instance.clientId)` — the guard reads the id off the instance rather than following the relationship |
+| 42 | `update_status` | [instance_controller.py:78](../../app/controllers/instance_controller.py#L78) | same |
+| 43 | `delete_instance` | [instance_controller.py:94](../../app/controllers/instance_controller.py#L94) | same; returns `204` |
+| 44 | `diagnose_instance` | [instance_controller.py:109](../../app/controllers/instance_controller.py#L109) | same; loads the 10 most recent alerts, then calls `db.close()` — the connection goes back to the pool before the provider call, not after it — and then Stage 8 |
 
 **The shape you have now learned** — and it holds for all 19 endpoints:
 
@@ -287,7 +292,7 @@ sequenceDiagram
     R->>S: get_instance(db, id)
     S->>DB: SELECT
     S-->>R: Instance (or NotFoundException)
-    R->>D: assert_client_access(member, instance.client)
+    R->>D: assert_client_id_access(db, member, instance.clientId)
     R->>S: business call
     S->>DB: mutate + commit
     S-->>R: ORM object
@@ -350,7 +355,7 @@ The consumer side of what Stage 5 produces.
 | # | Function | Line | What to take away |
 |---:|---|---|---|
 | 59 | `list_alerts` | [alert_controller.py:21](../../app/controllers/alert_controller.py#L21) | `page`/`size` plus four optional query filters, all `None` by default |
-| 60 | `resolve_alert` | [alert_controller.py:47](../../app/controllers/alert_controller.py#L47) | Loads the alert itself to reach `alert.instance.client` for the guard — the one place a controller queries directly, and the one place a `404` comes from a raw `HTTPException` rather than a domain exception |
+| 60 | `resolve_alert` | [alert_controller.py:47](../../app/controllers/alert_controller.py#L47) | Loads the alert itself — with a `joinedload` of its instance, whose `clientId` is all the guard needs — the one place a controller queries directly, and the one place a `404` comes from a raw `HTTPException` rather than a domain exception |
 
 ---
 
@@ -429,14 +434,15 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 
 ### 9.2 `tests/`
 
-[tests/conftest.py](../../tests/conftest.py) first — three fixtures, and they explain how
-123 tests run in seconds:
+[tests/conftest.py](../../tests/conftest.py) first — four fixtures, and they explain how
+127 tests run in seconds:
 
 | # | Fixture | Line | What to take away |
 |---:|---|---|---|
-| 80 | `memoised_seed_hashing` | [conftest.py:16](../../tests/conftest.py#L16) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
-| 81 | `api` | [conftest.py:33](../../tests/conftest.py#L33) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
-| 82 | `auth_headers` | [conftest.py:72](../../tests/conftest.py#L72) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
+| 80 | `memoised_seed_hashing` | [conftest.py:18](../../tests/conftest.py#L18) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
+| 81 | `api` | [conftest.py:35](../../tests/conftest.py#L35) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
+| 82 | `auth_headers` | [conftest.py:74](../../tests/conftest.py#L74) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
+| 83 | `empty_scope_headers` | [conftest.py:93](../../tests/conftest.py#L93) | A fourth account the seed does not create: a `CLIENT_MANAGER` with no clients. It exists because an empty scope is the case both guards of stop 31–32 are easiest to get wrong — it has to keep meaning *nothing*. |
 
 Then read the suites in the same order as this document:
 

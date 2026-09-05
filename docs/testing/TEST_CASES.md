@@ -4,7 +4,7 @@
 |---|---|
 | System | TechValley Cloud Instance Monitoring System |
 | Document | Test Case specification |
-| Status | Baseline — matches the 125-case automated suite |
+| Status | Baseline — matches the 127-case automated suite |
 | Last reviewed | 2026-09-01 |
 
 The test scenarios, conditions and data used to check the system for defects — each with
@@ -157,6 +157,7 @@ Column meanings: **Steps / data** is the call to make; **Expected** is the exact
 | **TC-INST-20** | P1 | Instance 1 stopped first | `DELETE /api/instances/1`, then `GET /api/instances/1` | `204` with an empty body, then `404` | `instance_is_deleted_once_stopped` |
 | **TC-INST-21** | P1 | A scan has recorded alerts for instance 1 | Stop and delete instance 1, then `GET /api/alerts` | No alert references instance 1 — the cascade fired | `deleting_an_instance_removes_its_alerts`, `deleting_an_instance_removes_its_alerts_from_the_history` |
 | **TC-INST-22** | P1 | Instance 13 is STOPPED and belongs to manager2 | `DELETE /api/instances/13` as manager1 | `403`, and the row survives — the scope check runs **before** the delete | `delete_enforces_scope_and_existence` |
+| **TC-INST-23** | P1 | A `CLIENT_MANAGER` with no clients assigned | Call all four `/api/instances/{id}*` endpoints as that manager | `403` on each — see TC-X-09 | `a_manager_with_no_clients_reaches_no_single_instance` |
 
 ### 4.3 Monitoring — TC-MON
 
@@ -199,6 +200,7 @@ Column meanings: **Steps / data** is the call to make; **Expected** is the exact
 | **TC-ALRT-15** | P2 | Nine unresolved alerts | Resolve one, then read the report | `unresolvedAlertCount` drops from `9` to `8` | `resolving_removes_the_alert_from_the_report` |
 | **TC-ALRT-16** | P1 | An alert on manager2's instance | Resolve it as manager1 | `403`, and the alert is still unresolved | `resolving_another_managers_alert_is_forbidden` |
 | **TC-ALRT-17** | P3 | — | `PATCH /api/alerts/9999/resolve` | `404` with body `{"detail": …}` and **no `error` key** — the documented shape inconsistency | `resolving_an_unknown_alert_is_404` |
+| **TC-ALRT-18** | P1 | A scan has run; a `CLIENT_MANAGER` with no clients assigned | Resolve any alert as that manager | `403`, and the alert stays unresolved — the guard reaches the client through the alert's instance | `a_manager_with_no_clients_resolves_nothing` |
 
 ### 4.5 Clients, cost and SLA — TC-CLNT
 
@@ -257,6 +259,7 @@ per endpoint, and each is exercised inside the suites above.
 | **TC-X-06** | P3 | Auth and alert `404` | Trigger a `401`, a `403`, an unknown alert id | Body is `{"detail": …}` with no `error` key | `resolving_an_unknown_alert_is_404`, `protected_endpoints_reject_a_missing_token` |
 | **TC-X-07** | P2 | Every response | Inspect field names and datetime format | camelCase throughout; ISO-8601 UTC such as `2026-08-21T14:07:00` | Asserted implicitly by every case above |
 | **TC-X-08** | P1 | All 7 list endpoints, plus the report | Log in as a `CLIENT_MANAGER` with **no** clients assigned and call each one | Every response is empty — `total` = `0`, `items` = `[]`, and the report all zeros. An empty scope matches nothing; it must never fall back to matching everything | `a_manager_with_no_clients_sees_nothing` |
+| **TC-X-09** | P1 | The single-resource endpoints | As that same manager with no clients, `GET /api/instances/1`, `PATCH /api/instances/1/status`, `DELETE /api/instances/13`, `GET /api/instances/6/diagnosis` and `PATCH /api/alerts/{id}/resolve` | `403` on every one, with the `CLIENT_MANAGER can only access clients assigned to them` detail; instance 1 is unchanged and instance 13 still exists. The guard resolves the scope in SQL ([PERFORMANCE_BUGS § PERF-11](../performance/PERFORMANCE_BUGS.md#perf-11)), so the empty case must be pinned here as it is for the lists | `a_manager_with_no_clients_reaches_no_single_instance`, `a_manager_with_no_clients_resolves_nothing` |
 
 ---
 
@@ -269,7 +272,7 @@ database is freshly seeded.
 
 1. Every P1 case passes. A P1 failure is a release blocker.
 2. Every P2 case passes, or the failure is recorded as a known defect with a decision.
-3. `pytest -q` reports **125 passed**.
+3. `pytest -q` reports **127 passed**.
 4. Any case whose expected value the change moved has been updated **in the same commit**,
    along with [../demo/SEED_DATA.md](../demo/SEED_DATA.md) and
    [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if the numbers there moved
@@ -325,18 +328,18 @@ Requirement → the cases that verify it. Business-level traceability continues 
 | FR-01 Authentication | F-AUTH-01, F-AUTH-02, F-AUTH-03 | TC-AUTH-01 … TC-AUTH-09 |
 | FR-02 Client management | F-CLNT-01, F-CLNT-02, F-CLNT-03 | TC-CLNT-01 … TC-CLNT-10 |
 | FR-03 Instance register | F-INST-01, F-INST-02, F-INST-03 | TC-INST-01 … TC-INST-14 |
-| FR-04 Instance lifecycle | F-INST-04, F-INST-05 | TC-INST-15 … TC-INST-22 |
+| FR-04 Instance lifecycle | F-INST-04, F-INST-05 | TC-INST-15 … TC-INST-23 |
 | FR-05 Detection and reporting | F-MON-01 … F-MON-04 | TC-MON-01 … TC-MON-15 |
-| FR-06 Alert lifecycle | F-ALRT-01, F-ALRT-02 | TC-ALRT-01 … TC-ALRT-17 |
+| FR-06 Alert lifecycle | F-ALRT-01, F-ALRT-02 | TC-ALRT-01 … TC-ALRT-18 |
 | FR-07 Cost and forecast | F-CLNT-04, F-CLNT-05 | TC-CLNT-11 … TC-CLNT-17 |
 | FR-08 SLA reporting | F-CLNT-06 | TC-CLNT-18 … TC-CLNT-22 |
 | FR-09 Diagnosis | F-DIAG-01 | TC-DIAG-01 … TC-DIAG-08 |
-| FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-08 |
+| FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-09 |
 | NFR-REL-01 Provider never fails a request | F-DIAG-01 | TC-DIAG-01, TC-DIAG-04 |
 | NFR-REL-04 Repeated writes are no-ops | F-INST-04, F-ALRT-02 | TC-INST-17, TC-ALRT-14 |
 | NFR-REL-05 No orphaned alerts | F-INST-05 | TC-INST-21 |
 | NFR-REL-06 Pages partition exactly | F-X-01 | TC-INST-11, TC-ALRT-10, TC-MON-08 |
-| NFR-SEC-02 Authorization per request | F-X-02 | TC-AUTH-09, TC-X-03, TC-X-04, TC-X-08 |
+| NFR-SEC-02 Authorization per request | F-X-02 | TC-AUTH-09, TC-X-03, TC-X-04, TC-X-08, TC-X-09 |
 | NFR-SEC-03 No account enumeration | F-AUTH-01 | TC-AUTH-04 |
 | NFR-USE-04 Over-range page is empty | F-X-01 | TC-INST-12, TC-ALRT-11 |
 
