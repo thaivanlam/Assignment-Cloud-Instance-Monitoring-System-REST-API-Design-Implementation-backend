@@ -46,7 +46,7 @@ def list_instances(
     db: Session = Depends(get_db),
     member: Member = Depends(get_current_member),
 ):
-    client_ids = accessible_client_ids(member, db)
+    client_ids = accessible_client_ids(member)
     items, total, total_pages = instance_service.list_instances(
         db, client_ids, page=page, size=size, status=status, clientId=clientId,
         region=region, instanceType=instanceType.value if instanceType else None, sort=sort,

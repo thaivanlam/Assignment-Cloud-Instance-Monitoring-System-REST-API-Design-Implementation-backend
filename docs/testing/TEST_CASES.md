@@ -4,7 +4,7 @@
 |---|---|
 | System | TechValley Cloud Instance Monitoring System |
 | Document | Test Case specification |
-| Status | Baseline — matches the 124-case automated suite |
+| Status | Baseline — matches the 125-case automated suite |
 | Last reviewed | 2026-09-01 |
 
 The test scenarios, conditions and data used to check the system for defects — each with
@@ -256,6 +256,7 @@ per endpoint, and each is exercised inside the suites above.
 | **TC-X-05** | P2 | Domain failures | Trigger `409`, `404` on an instance/client, `400` on a client | Body is `{"error": …, "detail": …}` | `running_instance_cannot_be_deleted`, `create_instance_rejects_an_unknown_client`, `client_registration_rejects_a_manager_id_that_is_not_a_manager` |
 | **TC-X-06** | P3 | Auth and alert `404` | Trigger a `401`, a `403`, an unknown alert id | Body is `{"detail": …}` with no `error` key | `resolving_an_unknown_alert_is_404`, `protected_endpoints_reject_a_missing_token` |
 | **TC-X-07** | P2 | Every response | Inspect field names and datetime format | camelCase throughout; ISO-8601 UTC such as `2026-08-21T14:07:00` | Asserted implicitly by every case above |
+| **TC-X-08** | P1 | All 7 list endpoints, plus the report | Log in as a `CLIENT_MANAGER` with **no** clients assigned and call each one | Every response is empty — `total` = `0`, `items` = `[]`, and the report all zeros. An empty scope matches nothing; it must never fall back to matching everything | `a_manager_with_no_clients_sees_nothing` |
 
 ---
 
@@ -268,7 +269,7 @@ database is freshly seeded.
 
 1. Every P1 case passes. A P1 failure is a release blocker.
 2. Every P2 case passes, or the failure is recorded as a known defect with a decision.
-3. `pytest -q` reports **124 passed**.
+3. `pytest -q` reports **125 passed**.
 4. Any case whose expected value the change moved has been updated **in the same commit**,
    along with [../demo/SEED_DATA.md](../demo/SEED_DATA.md) and
    [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if the numbers there moved
@@ -330,12 +331,12 @@ Requirement → the cases that verify it. Business-level traceability continues 
 | FR-07 Cost and forecast | F-CLNT-04, F-CLNT-05 | TC-CLNT-11 … TC-CLNT-17 |
 | FR-08 SLA reporting | F-CLNT-06 | TC-CLNT-18 … TC-CLNT-22 |
 | FR-09 Diagnosis | F-DIAG-01 | TC-DIAG-01 … TC-DIAG-08 |
-| FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-07 |
+| FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-08 |
 | NFR-REL-01 Provider never fails a request | F-DIAG-01 | TC-DIAG-01, TC-DIAG-04 |
 | NFR-REL-04 Repeated writes are no-ops | F-INST-04, F-ALRT-02 | TC-INST-17, TC-ALRT-14 |
 | NFR-REL-05 No orphaned alerts | F-INST-05 | TC-INST-21 |
 | NFR-REL-06 Pages partition exactly | F-X-01 | TC-INST-11, TC-ALRT-10, TC-MON-08 |
-| NFR-SEC-02 Authorization per request | F-X-02 | TC-AUTH-09, TC-X-03, TC-X-04 |
+| NFR-SEC-02 Authorization per request | F-X-02 | TC-AUTH-09, TC-X-03, TC-X-04, TC-X-08 |
 | NFR-SEC-03 No account enumeration | F-AUTH-01 | TC-AUTH-04 |
 | NFR-USE-04 Over-range page is empty | F-X-01 | TC-INST-12, TC-ALRT-11 |
 

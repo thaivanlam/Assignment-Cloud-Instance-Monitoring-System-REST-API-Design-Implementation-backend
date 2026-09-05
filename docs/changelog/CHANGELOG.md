@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-05](#2026-09-05--perf-10-fixed-a-managers-scope-rides-inside-the-query) | PERF-10 fixed | A `CLIENT_MANAGER` request no longer runs a query just to find out which clients they manage |
 | [2026-09-01](#2026-09-01--requirements-test-cases-and-a-user-manual) | Requirements, test cases and a user manual | BRD, SRS, FRS, use cases and user stories; a test case specification; an end-user manual |
 | [2026-09-01](#2026-09-01--security-review) | Security review | 15 reproduced findings, two critical — a signing key anyone can read, and credentials served to anyone |
 | [2026-09-01](#2026-09-01--perf-09-fixed-the-alert-listing-joins-only-when-it-has-to) | PERF-09 fixed | An `ADMIN` reading alert history no longer joins `instances` for a column nothing uses |
@@ -42,6 +43,77 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-05 — PERF-10 fixed: a manager's scope rides inside the query
+
+The tenth of the fifteen performance findings closed, and the first half of the auth-path
+work the review left as step 8b. No behaviour changed: every response is byte for byte what
+it was, for both roles. 125 tests pass — the 124 that existed, unchanged, plus one new one.
+
+### Fixed
+
+- **The `CLIENT_MANAGER` scope is a subquery, not a round trip.**
+  `accessible_client_ids` in [../../app/core/deps.py](../../app/core/deps.py) used to run
+  `SELECT clients.id WHERE managerId = ?` and hand back a list of ids, which every list
+  endpoint then spent as an `IN (?, ?, …)` in the query it was about to run anyway. It now
+  returns that `SELECT` itself and the caller drops it into the same `IN`, so the scope is
+  resolved inside the statement instead of before it. The function no longer takes a
+  `Session` — it builds a query rather than running one.
+- **One statement off every `CLIENT_MANAGER` request.** Measured against a `git worktree`
+  of the parent commit: `GET /api/alerts`, `/api/instances`, `/api/clients` and the three
+  `/api/monitor/*` scans each fall from **4 statements to 3**, and
+  `GET /api/monitor/report` from **7 to 6** — the scope was one lookup feeding five
+  statements and is now folded into each of them. The `ADMIN` path is untouched at 3 and 6;
+  it never ran the scope query. Every plan is unchanged apart from the scope seek moving
+  inside it, still on `ix_clients_managerId`, and still evaluated once per statement
+  (`LIST SUBQUERY`, not `CORRELATED LIST SUBQUERY`).
+- **The `IN` list no longer grows with the manager's client assignment.** The old form
+  carried one bind parameter per client — five in the seed, and SQLite caps a statement at
+  32,766. The subquery is one parameter whatever the manager owns.
+- **The `-1` sentinel is gone** from all eight call sites. It existed for the manager with
+  no clients, whose id list was empty; a subquery that selects no rows matches nothing on
+  its own. That case is now held by a test instead — see below.
+- **The `members` re-read stays**, as the finding said it should. It is what makes a
+  deleted or demoted member's token stop working on the next request
+  ([../security/SECURITY_BUGS.md § SEC-04](../security/SECURITY_BUGS.md#sec-04)), and it is
+  now the whole of the auth path's cost.
+
+### Added
+
+- **`test_a_manager_with_no_clients_sees_nothing`** in
+  [../../tests/test_clients.py](../../tests/test_clients.py), recorded as **TC-X-08**. An
+  empty scope is the case where a filter is easiest to lose: drop it and the caller sees
+  the whole table rather than nothing. The seed has no manager without clients, so the test
+  registers one, then asserts that all six scoped lists and the report come back empty.
+  Verified on both checkouts — identical empty responses before and after — so it guards
+  the scope mechanism rather than this change in particular.
+
+### Documentation
+
+- [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) — PERF-10 marked
+  **Fixed**, with what landed, why the subquery is built over an alias, the before/after
+  statement counts and plans, and what is deliberately left alone. Step 8 of the suggested
+  order splits again into 8b (done) and 8c; [PERF-11](../performance/PERFORMANCE_BUGS.md#perf-11)
+  is annotated, because its proposed fix leaned on an accessible-id set that no longer
+  exists and now needs an `EXISTS` of its own. The measurement caveats also finish the
+  correction the PERF-09 entry started: one remaining mention of a 16-instance seed reads
+  15, which is what [../demo/SEED_DATA.md](../demo/SEED_DATA.md) has always built.
+- [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md) — § 2.1 describes
+  the scope as a subquery and the empty case as matching nothing on its own, rather than as
+  an `IN (-1)` guard.
+- [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md) — stage 3's `[-1]` trick
+  is replaced by the `None` / scope-subquery convention, and the line references the new
+  import moved are corrected across every stage that cites them.
+- [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md),
+  [../security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md) — the request-flow diagram
+  and the "authorization is applied" note now say one auth query rather than two.
+- [../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md),
+  [../testing/TEST_CASES.md](../testing/TEST_CASES.md),
+  [../performance/README.md](../performance/README.md) and the test counts in
+  [../../README.md](../../README.md) and [../../CLAUDE.md](../../CLAUDE.md) — the new case
+  and TC-X-08, 10 of 15 findings fixed, 124 → 125.
 
 ---
 

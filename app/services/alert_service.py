@@ -1,5 +1,6 @@
 from datetime import date, datetime, time
 
+from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundException
@@ -10,7 +11,7 @@ from app.pagination import DEFAULT_SIZE, paginate
 
 def list_alerts(
     db: Session,
-    client_ids: list[int] | None,
+    client_ids: Select[tuple[int]] | None,
     page: int = 1,
     size: int = DEFAULT_SIZE,
     alertType: AlertType | None = None,
@@ -33,7 +34,7 @@ def list_alerts(
         # per request since the count query was added
         # (docs/performance/PERFORMANCE_BUGS.md § PERF-09).
         query = query.join(Instance, Alert.instanceId == Instance.id).filter(
-            Instance.clientId.in_(client_ids or [-1])
+            Instance.clientId.in_(client_ids)
         )
     if alertType is not None:
         query = query.filter(Alert.alertType == alertType)

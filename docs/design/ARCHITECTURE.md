@@ -64,7 +64,7 @@ APIRouter endpoint  (app/controllers/…)
      ├─ load the resource via a service
      ├─ assert_client_access(member, client)      → 403 if out of scope
      │      or
-     └─ accessible_client_ids(member, db)         → None (ADMIN) or id list (manager)
+     └─ accessible_client_ids(member)             → None (ADMIN) or an id subquery
      │
      ▼
 Service function  (app/services/…)

@@ -23,7 +23,7 @@ def warnings(
     member: Member = Depends(get_current_member),
 ):
     items, total, total_pages = monitor_service.check_warnings(
-        db, accessible_client_ids(member, db), page=page, size=size
+        db, accessible_client_ids(member), page=page, size=size
     )
     return PageResponse(
         items=items, total=total, page=page, size=size, totalPages=total_pages
@@ -42,7 +42,7 @@ def errors(
     member: Member = Depends(get_current_member),
 ):
     items, total, total_pages = monitor_service.check_errors(
-        db, accessible_client_ids(member, db), page=page, size=size
+        db, accessible_client_ids(member), page=page, size=size
     )
     return PageResponse(
         items=items, total=total, page=page, size=size, totalPages=total_pages
@@ -61,7 +61,7 @@ def long_stopped(
     member: Member = Depends(get_current_member),
 ):
     items, total, total_pages = monitor_service.check_long_stopped(
-        db, accessible_client_ids(member, db), page=page, size=size
+        db, accessible_client_ids(member), page=page, size=size
     )
     return PageResponse(
         items=items, total=total, page=page, size=size, totalPages=total_pages
@@ -74,4 +74,4 @@ def long_stopped(
     summary="Full status report (count by status / warnings / total cost / unresolved alerts)",
 )
 def report(db: Session = Depends(get_db), member: Member = Depends(get_current_member)):
-    return monitor_service.build_report(db, accessible_client_ids(member, db))
+    return monitor_service.build_report(db, accessible_client_ids(member))

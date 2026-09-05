@@ -1,5 +1,6 @@
 from datetime import datetime
 
+from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from app.config import UNIT_PRICES
@@ -38,7 +39,7 @@ def create_instance(db: Session, data: InstanceCreate) -> Instance:
 
 def list_instances(
     db: Session,
-    client_ids: list[int] | None,
+    client_ids: Select[tuple[int]] | None,
     page: int = 1,
     size: int = DEFAULT_SIZE,
     status: InstanceStatus | None = None,
@@ -51,7 +52,7 @@ def list_instances(
 
     # Role-based visibility: CLIENT_MANAGER only sees their clients' instances
     if client_ids is not None:
-        query = query.filter(Instance.clientId.in_(client_ids or [-1]))
+        query = query.filter(Instance.clientId.in_(client_ids))
 
     if status is not None:
         query = query.filter(Instance.status == status)

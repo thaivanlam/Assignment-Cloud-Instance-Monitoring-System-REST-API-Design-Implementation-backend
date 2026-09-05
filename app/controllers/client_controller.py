@@ -45,7 +45,7 @@ def list_clients(
     member: Member = Depends(get_current_member),
 ):
     items, total, total_pages = client_service.list_clients(
-        db, accessible_client_ids(member, db), page=page, size=size
+        db, accessible_client_ids(member), page=page, size=size
     )
     return PageResponse(
         items=items, total=total, page=page, size=size, totalPages=total_pages
