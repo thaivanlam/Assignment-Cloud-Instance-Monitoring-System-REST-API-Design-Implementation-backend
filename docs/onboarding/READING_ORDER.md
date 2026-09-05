@@ -373,8 +373,8 @@ and the last two hold the only real arithmetic in the codebase.
 | 65 | `get_client_instances` | [client_service.py:61](../../app/services/client_service.py#L61) | Validates the client first, so a missing client gives `404` rather than an empty list. Deliberately **unpaginated** — read its docstring for why the cost and SLA calculations below cannot take a page. |
 | 66 | `list_client_instances` | [client_service.py:72](../../app/services/client_service.py#L72) | The paginated form, and the only one an endpoint serves directly. Reading it against the stop above is the clearest illustration in the codebase of when pagination applies and when it cannot. |
 | 67 | `get_client_cost` | [client_service.py:80](../../app/services/client_service.py#L80) | Sums the **stored** `monthlyCost` of *all* instances regardless of status, plus a per-instance breakdown. |
-| 68 | `get_cost_forecast` | [client_service.py:104](../../app/services/client_service.py#L104) | The contrast that matters: the forecast counts **only `RUNNING`** instances, priced from `UNIT_PRICES`. Current cost ≠ forecast, by design — [../business-rules/COST.md](../business-rules/COST.md) explains why. |
-| 69 | `get_sla` | [client_service.py:137](../../app/services/client_service.py#L137) | **Read the docstring before the code.** There is no status-history table, so uptime is approximated: the window runs `max(month start, launchedAt)` → now; an instance counts as up until now if `RUNNING`, or until `updatedAt` otherwise. The client figure is the mean across instances, compared against its plan threshold. An honest approximation, documented as one in [../business-rules/SLA.md](../business-rules/SLA.md). |
+| 68 | `get_cost_forecast` | [client_service.py:104](../../app/services/client_service.py#L104) | The contrast that matters: the forecast counts **only `RUNNING`** instances, priced from `UNIT_PRICES`. Current cost ≠ forecast, by design — [../business-rules/COST.md](../business-rules/COST.md) explains why. Read its query against the stop above as well: this one counts in SQL because no instance reaches the response, where `get_client_cost` loads its rows because every one of them does ([../performance/PERFORMANCE_BUGS.md § PERF-12](../performance/PERFORMANCE_BUGS.md#perf-12)). |
+| 69 | `get_sla` | [client_service.py:144](../../app/services/client_service.py#L144) | **Read the docstring before the code.** There is no status-history table, so uptime is approximated: the window runs `max(month start, launchedAt)` → now; an instance counts as up until now if `RUNNING`, or until `updatedAt` otherwise. The client figure is the mean across instances, compared against its plan threshold. An honest approximation, documented as one in [../business-rules/SLA.md](../business-rules/SLA.md). |
 
 **Controller** —
 [app/controllers/client_controller.py](../../app/controllers/client_controller.py). Six
@@ -435,7 +435,7 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 ### 9.2 `tests/`
 
 [tests/conftest.py](../../tests/conftest.py) first — four fixtures, and they explain how
-127 tests run in seconds:
+128 tests run in seconds:
 
 | # | Fixture | Line | What to take away |
 |---:|---|---|---|

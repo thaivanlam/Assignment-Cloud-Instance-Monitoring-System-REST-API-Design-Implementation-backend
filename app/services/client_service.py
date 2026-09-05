@@ -1,6 +1,6 @@
 
 
-from sqlalchemy import Select
+from sqlalchemy import Select, func
 from sqlalchemy.orm import Session
 
 from app.config import SLA_THRESHOLDS, UNIT_PRICES
@@ -105,19 +105,26 @@ def get_cost_forecast(db: Session, client_id: int) -> dict:
     """Next-month forecast: unit price x count of currently RUNNING instances.
     SMALL $50 / MEDIUM $120 / LARGE $250 per month."""
     client = get_client(db, client_id)
-    running = (
-        db.query(Instance)
+    # Counted in SQL. The response carries no instance field — only counts and
+    # subtotals — so loading the rows fetched a client's entire RUNNING set to produce
+    # at most three numbers. `GROUP BY` returns those three rows instead. See
+    # docs/performance/PERFORMANCE_BUGS.md § PERF-12.
+    counts = (
+        db.query(Instance.instanceType, func.count(Instance.id))
         .filter(Instance.clientId == client_id, Instance.status == InstanceStatus.RUNNING)
+        .group_by(Instance.instanceType)
+        .order_by(Instance.instanceType)
         .all()
     )
 
     breakdown: dict[str, dict] = {}
-    total = 0.0
-    for inst in running:
-        t = inst.instanceType.value
-        entry = breakdown.setdefault(t, {"count": 0, "unitPrice": UNIT_PRICES[t], "subtotal": 0.0})
-        entry["count"] += 1
-        entry["subtotal"] = round(entry["count"] * entry["unitPrice"], 2)
+    for instance_type, count in counts:
+        t = instance_type.value
+        breakdown[t] = {
+            "count": count,
+            "unitPrice": UNIT_PRICES[t],
+            "subtotal": round(count * UNIT_PRICES[t], 2),
+        }
     total = round(sum(e["subtotal"] for e in breakdown.values()), 2)
 
     now = utcnow()
@@ -128,7 +135,7 @@ def get_cost_forecast(db: Session, client_id: int) -> dict:
         "clientId": client.id,
         "clientName": client.clientName,
         "forecastMonth": f"{next_year:04d}-{next_month:02d}",
-        "runningInstanceCount": len(running),
+        "runningInstanceCount": sum(e["count"] for e in breakdown.values()),
         "forecastCost": total,
         "breakdown": breakdown,
     }
