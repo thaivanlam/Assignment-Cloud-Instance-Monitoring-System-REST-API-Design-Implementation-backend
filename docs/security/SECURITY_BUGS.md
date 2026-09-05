@@ -14,7 +14,7 @@ The review was scoped to three questions, in this order:
    credentials, or the existence of records the caller is not entitled to?
 3. **Session integrity** — can a token be forged, and can an issued one be stopped?
 
-Nothing here is a functional bug. All 125 tests pass, and every endpoint returns the
+Nothing here is a functional bug. All 127 tests pass, and every endpoint returns the
 answer its documentation promises. These are the places where it also answers someone who
 should not have been asking.
 
@@ -277,8 +277,8 @@ functional test for the limit, so it cannot be removed silently
 see.**
 
 Every scoped handler fetches the record first and checks entitlement second — for example
-[instance_controller.py:62-64](../../app/controllers/instance_controller.py#L62-L64) and
-[alert_controller.py:54-57](../../app/controllers/alert_controller.py#L54-L57). The two
+[instance_controller.py:67-69](../../app/controllers/instance_controller.py#L67-L69) and
+[alert_controller.py:59-61](../../app/controllers/alert_controller.py#L59-L61). The two
 failure modes are therefore distinguishable:
 
 ```

@@ -63,7 +63,9 @@ APIRouter endpoint  (app/controllers/…)
      │
      ├─ load the resource via a service
      ├─ assert_client_access(member, client)      → 403 if out of scope
-     │      or
+     │      or, when only the id is in hand
+     ├─ assert_client_id_access(db, member, id)   → 403 if out of scope, as one EXISTS
+     │      or, for a list
      └─ accessible_client_ids(member)             → None (ADMIN) or an id subquery
      │
      ▼

@@ -72,3 +72,33 @@ def accessible_client_ids(member: Member) -> Select[tuple[int]] | None:
         return None
     scope = aliased(Client)
     return select(scope.id).where(scope.managerId == member.id)
+
+
+def assert_client_id_access(db: Session, member: Member, client_id: int) -> None:
+    """`assert_client_access` given only the client's id, without loading the client.
+
+    Every caller that holds an `Instance` already holds `instance.clientId`, but reaching
+    `instance.client` to compare one integer fired a lazy load — a whole `clients` row
+    fetched and turned into an ORM object per request, and two chained loads on the
+    alert path (docs/performance/PERFORMANCE_BUGS.md § PERF-11).
+
+    So the question is asked of the database instead of the identity map: is this id in
+    the scope `accessible_client_ids` builds? One `EXISTS`, which SQLite answers with a
+    single primary-key seek, and nothing is loaded. An ADMIN's scope is `None` — every
+    client — so an ADMIN pays no statement at all.
+
+    Use `assert_client_access` where the `Client` is in hand for another reason; the two
+    apply the same rule and raise the same 403.
+    """
+    scope = accessible_client_ids(member)
+    if scope is None:
+        return
+
+    # The scope selects exactly one column, the aliased `clients.id`, so narrowing it to
+    # one id is a `WHERE` on that column rather than a second copy of the scope rule.
+    scope_id = scope.selected_columns.id
+    if not db.scalar(select(scope.where(scope_id == client_id).exists())):
+        raise HTTPException(
+            status_code=403,
+            detail="CLIENT_MANAGER can only access clients assigned to them",
+        )

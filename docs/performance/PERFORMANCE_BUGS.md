@@ -1,13 +1,13 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Ten — [PERF-01](#perf-01)
-through [PERF-10](#perf-10) — have since been fixed; the **Status** column below says
+findings, ranked by the load at which they start to hurt. Eleven — [PERF-01](#perf-01)
+through [PERF-11](#perf-11) — have since been fixed; the **Status** column below says
 which are still open.
 
 Nothing here is a functional bug — every one of the tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
-returning them *at all* under concurrency. (The suite has grown from 104 cases to 125
+returning them *at all* under concurrency. (The suite has grown from 104 cases to 127
 across these fixes; each finding below quotes the count at the time it landed.)
 
 **Every number below was measured**, not estimated. The method is in
@@ -30,7 +30,7 @@ challenged.
 | [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | **Fixed** |
 | [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | **Fixed** |
 | [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | **Fixed** |
-| [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | Open |
+| [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | **Fixed** |
 | [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium | Open |
 | [PERF-13](#perf-13) | PBKDF2 at 260,000 iterations dominates the login path | `core/security.py` | Low (by design) | Won't fix |
 | [PERF-14](#perf-14) | A new Anthropic HTTP client is built per diagnosis request | `services/llm_service.py` | Low | Open |
@@ -1158,16 +1158,17 @@ is the failure mode where an empty scope stops meaning "nothing" and starts mean
 The `members` lookup, by design — the first statement in the trace above is still there,
 and re-reading the row is what makes an invalidated member's token stop working.
 
-[PERF-11](#perf-11) is untouched: it is the other half of the original step 8, and the lazy
-loads it describes are still one query each, so a single-object request like
-`GET /api/instances/1` still issues three. What this fix changes for it is the shape of the
-remedy that finding proposes — see there.
+[PERF-11](#perf-11) was untouched here: it is the other half of the original step 8, and
+the lazy loads it describes were still one query each, so a single-object request like
+`GET /api/instances/1` still issued three. It has since been fixed, against the shape this
+one left it — see there.
 
 ---
 
 ### PERF-11
 
 **The authorization check lazy-loads a relationship on every request.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-10) at the end of this finding.
 
 `assert_client_access(member, instance.client)` needs a `Client` object, so accessing
 `.client` fires a lazy load. Measured, `GET /api/instances/1` — 3 queries, the third being
@@ -1185,6 +1186,168 @@ set the request already computes". There is no such set any more — the scope i
 that rides inside the query it filters, and a single-object endpoint has no query for it to
 ride in. The remedy is the same size, but it is a statement of its own rather than a free
 comparison: one `EXISTS`, replacing one lazy load, and two of them for `resolve_alert`.)
+
+#### The fix that landed
+
+The shape proposed above, and the parenthesis is the part that turned out to matter: what
+landed is one `EXISTS` where a lazy load used to be, not a free comparison.
+
+`assert_client_access` stays exactly as it was, and a second guard joins it in
+[deps.py](../../app/core/deps.py) for callers that hold an id rather than a row:
+
+```python
+def assert_client_id_access(db: Session, member: Member, client_id: int) -> None:
+    scope = accessible_client_ids(member)
+    if scope is None:
+        return
+    scope_id = scope.selected_columns.id
+    if not db.scalar(select(scope.where(scope_id == client_id).exists())):
+        raise HTTPException(status_code=403, detail=...)
+```
+
+Three things follow from writing it this way:
+
+- **It asks the scope [PERF-10](#perf-10) builds, narrowed to one id.** The rule that
+  decides what a manager may see is still written once. `accessible_client_ids` selects
+  exactly one column, so narrowing it is a `WHERE` on `selected_columns.id` rather than a
+  second copy of `managerId == member.id` that could later drift from the first.
+- **An `ADMIN` pays nothing.** `None` means "no scope", so the guard returns before it
+  reaches the database — where the lazy load it replaces fired for every caller, whatever
+  their role.
+- **The empty scope stays safe.** A manager with no clients matches no id, so the `EXISTS`
+  is false and the answer is `403` — the same property § 2.1 of
+  [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md) relies on for
+  the lists, now pinned for single objects too (*Verification* below).
+
+The four `/api/instances/{id}*` handlers had `instance.clientId` in hand all along, so each
+one drops the relationship:
+
+```python
+-    assert_client_access(member, instance.client)
++    assert_client_id_access(db, member, instance.clientId)
+```
+
+`resolve_alert` needed the first of its two hops for real — the alert carries `instanceId`,
+not `clientId` — so that hop moves into the query that was running anyway, which is the
+`joinedload` half of the fix as proposed:
+
+```python
+alert = db.get(Alert, alert_id, options=[joinedload(Alert.instance)])
+...
+assert_client_id_access(db, member, alert.instance.clientId)
+```
+
+Two call sites deliberately keep `assert_client_access`: `POST /api/instances` and the four
+`/api/clients/{id}/*` endpoints load the client for their own reasons — a `404` on an
+unknown one, or the response itself — so for them the comparison really is free, and asking
+the database instead would *add* a statement. The finding is about loading a row **only**
+to compare it.
+
+##### Measured — the query counts
+
+The statement listener from [§ How these were measured](#how-these-were-measured), run
+against a `git worktree` of the parent commit and the working tree by the same script:
+
+| Request | Before | After |
+|---|---|---|
+| `ADMIN` `GET /api/instances/1` | 3 | **2** |
+| `ADMIN` `GET /api/instances/5/diagnosis` | 4 | **3** |
+| `ADMIN` `PATCH /api/instances/1/status` | 5 | **4** |
+| `ADMIN` `DELETE /api/instances/3` | 5 | **4** |
+| `ADMIN` `PATCH /api/alerts/1/resolve` | 6 | **4** |
+| `CLIENT_MANAGER` `GET /api/instances/1` | 3 | 3 |
+| `CLIENT_MANAGER` `GET /api/instances/5/diagnosis` | 4 | 4 |
+| `CLIENT_MANAGER` `PATCH /api/instances/1/status` | 5 | 5 |
+| `CLIENT_MANAGER` `DELETE /api/instances/3` | 5 | 5 |
+| `CLIENT_MANAGER` `PATCH /api/alerts/1/resolve` | 6 | **5** |
+
+Read the two halves of that table together, because they say different things.
+
+**An `ADMIN` loses a statement from every single-object request**, and two from
+`resolve_alert`: the lazy loads existed only to feed a check an `ADMIN` skips, and now they
+are not issued at all.
+
+**A `CLIENT_MANAGER` breaks even on count** for the instance endpoints — one lazy load out,
+one `EXISTS` in — exactly as the parenthesis above predicted. What changes there is what the
+statement does, not how many there are:
+
+```
+before   SELECT clients.id, clients."clientName", clients."contractPlan",
+                clients."managerId", clients."createdAt" FROM clients WHERE clients.id = ?
+after    SELECT EXISTS (SELECT clients_1.id FROM clients AS clients_1
+                        WHERE clients_1."managerId" = ? AND clients_1.id = ?)
+```
+
+A whole row fetched and turned into a `Client` instance in the session's identity map,
+against one boolean. `resolve_alert` is where the manager's count drops too: two chained
+loads become one `EXISTS`, because the instance now arrives with the alert.
+
+##### Measured — the plans
+
+`EXPLAIN QUERY PLAN` on the statements that listener captured, run against the seeded
+schema. `CLIENT_MANAGER PATCH /api/alerts/1/resolve`, every statement of it:
+
+```
+before   SEARCH members USING INTEGER PRIMARY KEY (rowid=?)
+         SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)
+         SEARCH instances USING INTEGER PRIMARY KEY (rowid=?)     <- lazy load
+         SEARCH clients USING INTEGER PRIMARY KEY (rowid=?)       <- lazy load
+         UPDATE alerts … SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)
+         SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)
+
+after    SEARCH members USING INTEGER PRIMARY KEY (rowid=?)
+         SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)
+           SEARCH instances_1 USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN  <- joinedload
+         SCAN CONSTANT ROW                                        <- the EXISTS
+           SCALAR SUBQUERY 1
+           SEARCH clients_1 USING INTEGER PRIMARY KEY (rowid=?)
+         UPDATE alerts … SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)
+         SEARCH alerts USING INTEGER PRIMARY KEY (rowid=?)
+           SEARCH instances_1 USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN
+```
+
+Every access is a primary-key seek before and after; the fix moves work between statements
+rather than making any one of them cheaper to plan. Two details are worth naming. The
+`EXISTS` seeks `clients` by **id** and tests `managerId` on the row it finds, rather than
+seeking `ix_clients_managerId` — SQLite prefers the more selective key, and the choice is
+its own; either way it is one row. And the closing `refresh` inherits the `joinedload`, so
+it re-reads the instance as well as the alert — one extra seek inside a statement that was
+already running, which is why the manager's count there drops by one rather than by two.
+
+##### Verification
+
+All 127 functional tests pass — the 125 that existed, unchanged, plus two added here. The
+125 are what make this safe: every endpoint that changed already had both of its answers
+pinned — `test_get_instance_enforces_scope_and_existence` and
+`test_delete_enforces_scope_and_existence` in
+[tests/test_instances.py](../../tests/test_instances.py),
+`test_resolving_another_managers_alert_is_forbidden` in
+[tests/test_alerts.py](../../tests/test_alerts.py), the `403` in
+[tests/test_diagnosis.py](../../tests/test_diagnosis.py) and the `PATCH …/status` one in
+[tests/test_member_c.py](../../tests/test_member_c.py) — a manager reaching another
+manager's row, and the same manager reaching their own.
+
+The two added cover the empty scope, as [PERF-10](#perf-10)'s single new test did for the
+lists: `test_a_manager_with_no_clients_reaches_no_single_instance` asserts `403` from all
+four instance endpoints, and `test_a_manager_with_no_clients_resolves_nothing` from the
+alert one. That is the failure mode a check written as a query has and a comparison does
+not — an empty scope must keep meaning *nothing*, where a lost filter would make it mean
+*everything*. The manager they use is a shared `empty_scope_headers` fixture in
+[tests/conftest.py](../../tests/conftest.py), which PERF-10's test moved onto as well.
+
+Beyond the suite, the measurement script compared the status code and body of all ten
+requests above across the two checkouts before reporting any count: identical, apart from
+the seed-relative timestamps that differ between two runs.
+
+##### What this does not fix
+
+`GET /api/instances/1` as a `CLIENT_MANAGER` is still three statements, and the third is
+still there to answer a question the second could have answered. Folding the scope into the
+instance lookup would remove it — and would turn every out-of-scope `403` into a `404`,
+which § 3 of [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md)
+decides against on purpose. The statement is the price of that decision, and it is now the
+cheapest form of it.
+
 
 ---
 
@@ -1280,7 +1443,7 @@ Ordered by benefit per unit of risk, not by severity.
 | 7 | Count without the sort | [PERF-08](#perf-08) | Low — **done**, with step 9 |
 | 8a | Conditional join | [PERF-09](#perf-09) | Low — **done** |
 | 8b | Scope filter as a subquery | [PERF-10](#perf-10) | Medium — **done** |
-| 8c | Drop the lazy loads | [PERF-11](#perf-11) | Medium |
+| 8c | Drop the lazy loads | [PERF-11](#perf-11) | Medium — **done** |
 | 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract — **done** |
 
 Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
@@ -1300,9 +1463,10 @@ other finding, so it was taken on its own as **8a** and rated Low rather than Me
 risk in the original step 8 lives entirely in the auth-path changes, which rewrite how
 scoping reaches the query. Those changes then split again: **8b** rewrites how the scope
 *is expressed* and touches every list endpoint, **8c** rewrites how a *single object* is
-authorized and touches none of them, and neither needs the other. 8b is done; what remains
-is **8c**, and it is worth noting that 8b removed the thing 8c was originally going to
-lean on — see [PERF-11](#perf-11).
+authorized and touches none of them, and neither needs the other. Both are done, in that
+order, and 8b removed the thing 8c had originally planned to lean on — it was taken
+second, so it was rewritten against what 8b left rather than against what the finding
+first proposed. See [PERF-11](#perf-11).
 
 ---
 
@@ -1370,6 +1534,17 @@ one, so a monitoring scan is counted as the repeat poll it will be in practice r
 on the call that records its alerts. The script compares `total`, the returned ids and the
 report's counts across the two checkouts before reporting any count, and the empty-scope
 run described under that finding was driven the same way.
+
+The before/after counts under [PERF-11](#perf-11) come from that same listener against
+**two checkouts** as well, for the same reason [PERF-10](#perf-10)'s did — the change adds
+a function and a parameter, so no monkeypatch can host both variants at once. The two read
+endpoints are requested twice and the second request is counted; the three write endpoints
+are counted on their first request against a freshly seeded database, because a repeat
+`PATCH` is a no-op with a shape of its own and a repeat `DELETE` is a `404`. Each pair is
+compared on status code and response body before any count is reported — identical across
+the two checkouts for all ten, apart from the seed-relative timestamps that necessarily
+differ between two runs, and the diagnosis text, for which the working tree's `.env` was
+withheld so both halves took the rule-based fallback rather than the provider.
 
 The before/after plans and latencies under [PERF-09](#perf-09) come from that listener
 again, with the pre-fix `list_alerts` — the unconditional join, restored as a monkeypatch —

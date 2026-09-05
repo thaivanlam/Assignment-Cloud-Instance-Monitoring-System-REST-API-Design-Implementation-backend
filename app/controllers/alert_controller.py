@@ -1,9 +1,9 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
-from app.core.deps import accessible_client_ids, assert_client_access, get_current_member
+from app.core.deps import accessible_client_ids, assert_client_id_access, get_current_member
 from app.database import get_db
 from app.models import AlertType, Member
 from app.pagination import DEFAULT_SIZE, PageParam, SizeParam
@@ -51,8 +51,13 @@ def resolve_alert(
 ):
     from app.models import Alert
 
-    alert = db.get(Alert, alert_id)
+    # The alert's instance comes back with it rather than on a lazy load of its own: the
+    # authorization check below is the only reader, and it needs one column,
+    # `clientId`. Reaching it as `alert.instance.client` cost two chained loads — the
+    # instance, then a whole `Client` row to compare one integer
+    # (docs/performance/PERFORMANCE_BUGS.md § PERF-11).
+    alert = db.get(Alert, alert_id, options=[joinedload(Alert.instance)])
     if alert is None:
         raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
-    assert_client_access(member, alert.instance.client)
+    assert_client_id_access(db, member, alert.instance.clientId)
     return alert_service.resolve_alert(db, alert_id)

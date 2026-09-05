@@ -51,15 +51,35 @@ all four `GET /api/monitor/*`.
 
 ### 2.2 Single-resource endpoints — check after load
 
-`assert_client_access(member, client)` runs once the row has been fetched. It returns
-immediately for `ADMIN`, and raises `403` when `client.managerId != member.id`.
+The rule is one comparison — is this client's `managerId` the caller's id? — and it is
+written twice, once for each way the caller can name the client. Both return immediately
+for `ADMIN`, and both raise the same `403`.
 
-Endpoints on this path: every `/api/instances/{id}*`, `/api/clients/{id}/*`, and
-`PATCH /api/alerts/{id}/resolve` (which walks `alert.instance.client` to find the owner).
+| Guard | Given | Costs |
+|---|---|---|
+| `assert_client_access(member, client)` | a `Client` already loaded | nothing — one field compared in Python |
+| `assert_client_id_access(db, member, client_id)` | only the id | one `EXISTS` for a manager, no statement for an `ADMIN` |
 
-`POST /api/instances` also uses it — the target client is loaded and checked *before*
-the instance is created, so a manager cannot plant an instance under someone else's
-client.
+`assert_client_access` is used where the row is fetched anyway. `/api/clients/{id}/*`
+loads the client to answer at all, and `POST /api/instances` loads the *target* client to
+`404` on an unknown one — and checks it *before* the instance is created, so a manager
+cannot plant an instance under someone else's client.
+
+`assert_client_id_access` is used where the client would otherwise be loaded **only to be
+compared**. Every `/api/instances/{id}*` handler holds `instance.clientId` already, and
+`PATCH /api/alerts/{id}/resolve` gets it off the instance its own query loads; reaching
+`instance.client` from either fetched a whole `clients` row to read one integer, and on
+the alert path it did so twice (docs/performance/PERFORMANCE_BUGS.md § PERF-11). Asking
+the database *whether* the id is in scope answers the same question without loading
+anything.
+
+The scope it asks against is the one `accessible_client_ids` builds, narrowed to the id
+in question — so the empty-scope case of § 2.1 holds here too, and for the same reason: a
+manager with no clients matches no id, and every single-object endpoint answers `403`.
+`test_a_manager_with_no_clients_reaches_no_single_instance` in
+[../../tests/test_instances.py](../../tests/test_instances.py) and
+`test_a_manager_with_no_clients_resolves_nothing` in
+[../../tests/test_alerts.py](../../tests/test_alerts.py) keep it that way.
 
 ---
 
