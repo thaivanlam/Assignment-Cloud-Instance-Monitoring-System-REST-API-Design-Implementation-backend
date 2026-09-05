@@ -8,7 +8,8 @@ from datetime import timedelta
 
 import pytest
 
-from app.models import Client
+from app.core.security import hash_password
+from app.models import Client, Member, Role
 from app.models.models import utcnow
 
 
@@ -118,6 +119,50 @@ def test_client_list_is_scoped_by_role(api, auth_headers):
     assert admin.json()["items"][0]["clientName"] == "VinaSoft"
     assert admin.json()["items"][0]["contractPlan"] == "PREMIUM"
     assert admin.json()["total"] == 10
+
+
+def test_a_manager_with_no_clients_sees_nothing(api):
+    """An empty scope must match nothing — not everything.
+
+    Every scoped list resolves the caller's clients as a subquery inside its own
+    statement (docs/performance/PERFORMANCE_BUGS.md § PERF-10). A manager assigned no
+    clients makes that subquery empty, which is the case where a filter is easiest to
+    lose: drop it and the caller sees the whole table.
+    """
+    client, db = api
+    db.add(
+        Member(
+            email="nobody@techvalley.vn",
+            password=hash_password("manager123!"),
+            name="No Clients",
+            role=Role.CLIENT_MANAGER,
+        )
+    )
+    db.commit()
+    token = client.post(
+        "/api/auth/login",
+        json={"email": "nobody@techvalley.vn", "password": "manager123!"},
+    ).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for path in (
+        "/api/clients",
+        "/api/instances",
+        "/api/alerts",
+        "/api/monitor/warnings",
+        "/api/monitor/errors",
+        "/api/monitor/long-stopped",
+    ):
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, path
+        assert response.json()["total"] == 0, path
+        assert response.json()["items"] == [], path
+
+    report = client.get("/api/monitor/report", headers=headers).json()
+    assert report["instanceCountByStatus"] == {"RUNNING": 0, "STOPPED": 0, "ERROR": 0}
+    assert report["warningCount"] == 0
+    assert report["totalMonthlyCost"] == 0.0
+    assert report["unresolvedAlertCount"] == 0
 
 
 def test_client_instances_are_listed_for_the_owning_manager(api, auth_headers):

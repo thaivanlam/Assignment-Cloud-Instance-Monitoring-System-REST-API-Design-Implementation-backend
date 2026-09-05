@@ -114,7 +114,7 @@ Reference: [../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination).
 |---|---|
 | **Applies to** | Every endpoint except `GET /` and `POST /api/auth/login` |
 | **Realises** | FR-10, BR-03, BR-04 |
-| **Verified by** | `list_instances_is_scoped_to_the_callers_clients`, `alert_history_is_scoped_to_the_callers_clients`, `client_sub_resources_enforce_scope_and_existence` |
+| **Verified by** | `list_instances_is_scoped_to_the_callers_clients`, `alert_history_is_scoped_to_the_callers_clients`, `client_sub_resources_enforce_scope_and_existence`, `a_manager_with_no_clients_sees_nothing` |
 
 **Processing — two paths, chosen by endpoint shape**
 

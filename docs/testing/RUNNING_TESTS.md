@@ -102,7 +102,7 @@ pytest prints the failing assertion with both sides expanded:
 >       assert body["forecastCost"] == 500.0
 E       assert 620.0 == 500.0
 
-tests/test_clients.py:203: AssertionError
+tests/test_clients.py:300: AssertionError
 ```
 
 Work through it in this order:

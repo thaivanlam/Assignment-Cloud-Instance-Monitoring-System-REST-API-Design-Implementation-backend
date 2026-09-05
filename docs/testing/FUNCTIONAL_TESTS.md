@@ -102,7 +102,7 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-124 cases across six files. Each file covers one area of the API.
+125 cases across six files. Each file covers one area of the API.
 
 ### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
 
@@ -198,7 +198,7 @@ set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.
 
-### 4.5 `test_clients.py` — clients, cost and SLA (25 cases)
+### 4.5 `test_clients.py` — clients, cost and SLA (26 cases)
 
 | Case | Pins |
 |---|---|
@@ -208,6 +208,7 @@ Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 | `client_registration_rejects_an_unknown_manager_id` | `404 NotFound` |
 | `client_registration_validates_the_body` | Unknown plan, empty name, non-numeric id → `422` |
 | `client_list_is_scoped_by_role` | ADMIN 10, manager1 `1–5`, manager2 `6–10` |
+| `a_manager_with_no_clients_sees_nothing` | An empty scope matches nothing, not everything: every scoped list and the report come back empty for a manager with no clients assigned |
 | `client_instances_are_listed_for_the_owning_manager` | `[1, 2, 3]` for VinaSoft |
 | `client_list_is_paginated` | `size=4` over ten clients: `[1–4]` then `[9, 10]`, `totalPages` 3 |
 | `client_list_pagination_counts_only_the_callers_clients` | manager1's `total` is 5, not 10 — the envelope never leaks the table size |

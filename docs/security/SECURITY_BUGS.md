@@ -14,7 +14,7 @@ The review was scoped to three questions, in this order:
    credentials, or the existence of records the caller is not entitled to?
 3. **Session integrity** — can a token be forged, and can an issued one be stopped?
 
-Nothing here is a functional bug. All 124 tests pass, and every endpoint returns the
+Nothing here is a functional bug. All 125 tests pass, and every endpoint returns the
 answer its documentation promises. These are the places where it also answers someone who
 should not have been asking.
 
