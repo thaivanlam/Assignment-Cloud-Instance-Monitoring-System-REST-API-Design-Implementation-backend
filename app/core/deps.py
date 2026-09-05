@@ -1,7 +1,8 @@
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, select
+from sqlalchemy.orm import Session, aliased
 
 from app.core.security import decode_access_token
 from app.database import get_db
@@ -50,9 +51,24 @@ def assert_client_access(member: Member, client: Client) -> None:
         )
 
 
-def accessible_client_ids(member: Member, db: Session) -> list[int] | None:
-    """Returns None for ADMIN (no filter), otherwise the manager's client id list."""
+def accessible_client_ids(member: Member) -> Select[tuple[int]] | None:
+    """Returns None for ADMIN (no filter), otherwise a SELECT of the manager's client ids.
+
+    A `SELECT` rather than a list: the caller drops it straight into an `IN`, so the scope
+    is resolved inside the statement that was going to run anyway instead of costing a
+    round trip of its own before it. Fetching the ids first made every `CLIENT_MANAGER`
+    request pay an extra query whose only output was a bind-parameter list
+    (docs/performance/PERFORMANCE_BUGS.md § PERF-10).
+
+    The subquery is built over an alias, so it keeps its own `FROM clients` and cannot be
+    correlated away when the enclosing query is itself over `clients` — `list_clients` is
+    exactly that case.
+
+    A manager with no clients needs no sentinel. The call sites used to write
+    `.in_(client_ids or [-1])`, spending an id that can never match on an empty list; a
+    subquery that selects no rows matches nothing on its own.
+    """
     if member.role == Role.ADMIN:
         return None
-    rows = db.query(Client.id).filter(Client.managerId == member.id).all()
-    return [r[0] for r in rows]
+    scope = aliased(Client)
+    return select(scope.id).where(scope.managerId == member.id)

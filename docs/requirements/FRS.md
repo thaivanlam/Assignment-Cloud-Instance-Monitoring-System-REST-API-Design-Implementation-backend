@@ -120,7 +120,7 @@ Reference: [../api/CONVENTIONS.md § 1](../api/CONVENTIONS.md#1-pagination).
 
 | Path | Used by | Rule |
 |---|---|---|
-| **Filter at the query** | List endpoints | Resolve the caller's accessible client ids. `ADMIN` → no filter at all. `CLIENT_MANAGER` → the ids of clients they manage, pushed into a SQL `IN (…)`. A manager with **zero** clients yields `IN (-1)`, an id that can never match, so the result is empty rather than unfiltered |
+| **Filter at the query** | List endpoints | Resolve the caller's accessible client ids. `ADMIN` → no filter at all. `CLIENT_MANAGER` → a subquery selecting the ids of clients they manage, pushed into a SQL `IN (…)` inside the statement being run. A manager with **zero** clients yields a subquery that selects nothing, and `IN` over nothing matches nothing, so the result is empty rather than unfiltered |
 | **Check after load** | Single-resource endpoints | Load the row, walk to its owning client, and compare. `ADMIN` passes immediately; a manager whose id differs from `client.managerId` gets `403` |
 
 **Rules**

@@ -1,13 +1,13 @@
 # Performance Bugs
 
 A review of `app/` for defects that cost latency, throughput, or concurrency. Fifteen
-findings, ranked by the load at which they start to hurt. Nine — [PERF-01](#perf-01)
-through [PERF-09](#perf-09) — have since been fixed; the **Status** column below says
+findings, ranked by the load at which they start to hurt. Ten — [PERF-01](#perf-01)
+through [PERF-10](#perf-10) — have since been fixed; the **Status** column below says
 which are still open.
 
 Nothing here is a functional bug — every one of the tests passes, and the API returns
 correct answers. These are the places where it stops returning them *fast*, or stops
-returning them *at all* under concurrency. (The suite has grown from 104 cases to 124
+returning them *at all* under concurrency. (The suite has grown from 104 cases to 125
 across these fixes; each finding below quotes the count at the time it landed.)
 
 **Every number below was measured**, not estimated. The method is in
@@ -29,7 +29,7 @@ challenged.
 | [PERF-07](#perf-07) | Six list endpoints have no pagination or limit | controllers, services | High | **Fixed** |
 | [PERF-08](#perf-08) | Pagination count query carries every column and the `ORDER BY` | `services/instance_service.py` | Medium | **Fixed** |
 | [PERF-09](#perf-09) | `list_alerts` joins `instances` even when the join is unused | `services/alert_service.py` | Medium | **Fixed** |
-| [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | Open |
+| [PERF-10](#perf-10) | Two queries of pure auth overhead on every request | `core/deps.py` | Medium | **Fixed** |
 | [PERF-11](#perf-11) | Authorization check lazy-loads a relationship per request | `core/deps.py`, controllers | Medium | Open |
 | [PERF-12](#perf-12) | Aggregates computed in Python over fully loaded rows | `services/client_service.py` | Medium | Open |
 | [PERF-13](#perf-13) | PBKDF2 at 260,000 iterations dominates the login path | `core/security.py` | Low (by design) | Won't fix |
@@ -816,7 +816,7 @@ cost and SLA responses still cover every instance rather than a page.
 at the end of this finding.
 
 `total = query.count()` at
-[instance_service.py:72](../../app/services/instance_service.py#L72) wrapped the fully
+[instance_service.py:73](../../app/services/instance_service.py#L73) wrapped the fully
 built query — sort included. Measured SQL:
 
 ```sql
@@ -888,7 +888,7 @@ scoping and every offered sort key.
 **`list_alerts` joins `instances` even when the join is unused.**
 **Fixed** — see [The fix that landed](#the-fix-that-landed-8) at the end of this finding.
 
-[alert_service.py:18](../../app/services/alert_service.py#L18) joined unconditionally, but
+[alert_service.py:19](../../app/services/alert_service.py#L19) joined unconditionally, but
 the join exists only to reach `Instance.clientId` for the scope filter. For an `ADMIN`,
 `client_ids is None` and the filter is never applied — the join is pure cost. Measured
 plan: `SCAN alerts` + a per-row `SEARCH instances` + `USE TEMP B-TREE FOR ORDER BY`.
@@ -903,13 +903,13 @@ the value of this fix; it does not change its shape.
 #### The fix that landed
 
 Exactly the move proposed above
-([alert_service.py:28](../../app/services/alert_service.py#L28)):
+([alert_service.py:29](../../app/services/alert_service.py#L29)):
 
 ```python
 query = db.query(Alert)
 if client_ids is not None:
     query = query.join(Instance, Alert.instanceId == Instance.id).filter(
-        Instance.clientId.in_(client_ids or [-1])
+        Instance.clientId.in_(client_ids)
     )
 ```
 
@@ -998,16 +998,19 @@ The `CLIENT_MANAGER` path is untouched by design, and its plan still ends in
 `USE TEMP B-TREE FOR ORDER BY`: driving the lookup off `ix_alerts_instanceId_alertType_isResolved`
 delivers rows in index order, so the `detectedAt` sort has to be done. That is the same
 trade [PERF-04](#perf-04) records for the scoped instance list, and it is a consequence of
-scoping needing the join at all — [PERF-10](#perf-10) is where that shape is addressed.
+scoping needing the join at all. [PERF-10](#perf-10) has since changed what the join is
+given — a subquery rather than a list of ids — but not that it is needed: reaching
+`Instance.clientId` from `alerts` still costs the join, and the sort step with it.
 
 ---
 
 ### PERF-10
 
 **Every request pays two queries of pure authentication overhead.**
+**Fixed** — see [The fix that landed](#the-fix-that-landed-9) at the end of this finding.
 
 `get_current_member` does `db.get(Member, sub)`, and `accessible_client_ids` then scans
-`clients` for the manager's ids ([deps.py:57](../../app/core/deps.py#L57)).
+`clients` for the manager's ids ([deps.py:54](../../app/core/deps.py#L54)).
 
 Measured, `CLIENT_MANAGER GET /api/alerts` — **3 queries, 2 of them overhead**:
 
@@ -1032,6 +1035,134 @@ The `members` lookup is harder to remove safely (the token carries `role`, but r
 the row is what makes "member no longer exists" work), so it should stay — indexing
 `clients.managerId` handles the other half.
 
+#### The fix that landed
+
+Exactly the shape proposed above. `accessible_client_ids` now *builds* the lookup instead
+of running it ([deps.py:54](../../app/core/deps.py#L54)):
+
+```python
+def accessible_client_ids(member: Member) -> Select[tuple[int]] | None:
+    if member.role == Role.ADMIN:
+        return None
+    scope = aliased(Client)
+    return select(scope.id).where(scope.managerId == member.id)
+```
+
+The `db` parameter is gone — nothing is executed here any more — and with it the round
+trip. Every call site already ended in an `IN`, so each one drops the `SELECT` straight
+into the filter it was building:
+
+```python
+query = query.filter(Instance.clientId.in_(client_ids))
+```
+
+`None` still means "ADMIN, no filter", so the `if client_ids is not None:` branch in all
+four services is unchanged, and so is every service signature apart from its type
+(`Select[tuple[int]] | None` in place of `list[int] | None`).
+
+Two details are deliberate:
+
+- **The subquery is built over an alias.** `list_clients` filters `clients` by a subquery
+  over `clients`; without the alias the two share a `FROM` element and the subquery is a
+  candidate for being correlated away. With `aliased(Client)` it always renders its own
+  `FROM clients AS clients_1` and cannot be.
+- **The `-1` sentinel is gone.** Every call site read `.in_(client_ids or [-1])`, guarding
+  the manager who has no clients — an empty list has no id to match. A subquery that
+  selects no rows matches nothing on its own, so the guard has nothing left to guard. That
+  path is now pinned by a test rather than by a sentinel; see *Verification* below.
+
+The `members` lookup stays, as the finding said it should. One of the two overhead queries
+was removable; this fix removes that one, and the auth cost of a `CLIENT_MANAGER` request
+is now the same single lookup an `ADMIN` pays.
+
+##### Measured — the query counts
+
+The statement listener from [§ How these were measured](#how-these-were-measured), run
+against a `git worktree` of the parent commit and the working tree by the same script.
+Every endpoint is called twice and the second call is the one counted, so the monitoring
+scans have already recorded their alerts rather than being counted mid-write:
+
+| Request | Before | After |
+|---|---|---|
+| `ADMIN` — any of the six scoped list endpoints | 3 | 3 |
+| `ADMIN` `GET /api/monitor/report` | 6 | 6 |
+| `CLIENT_MANAGER` `GET /api/alerts` | 4 | **3** |
+| `CLIENT_MANAGER` `GET /api/instances` | 4 | **3** |
+| `CLIENT_MANAGER` `GET /api/clients` | 4 | **3** |
+| `CLIENT_MANAGER` `GET /api/monitor/warnings` | 4 | **3** |
+| `CLIENT_MANAGER` `GET /api/monitor/errors` | 4 | **3** |
+| `CLIENT_MANAGER` `GET /api/monitor/long-stopped` | 4 | **3** |
+| `CLIENT_MANAGER` `GET /api/monitor/report` | 7 | **6** |
+
+One statement off every `CLIENT_MANAGER` request, and the `ADMIN` path untouched — it never
+ran the scope query. The report drops one rather than five: the scope was a single lookup
+feeding five statements, and it is now folded into each of them. Every paired run asserts
+an identical `total`, an identical list of ids and, for the report, identical counts and
+cost before reporting a number.
+
+The trace the finding opens with is now two statements:
+
+```
+SELECT members …                                                     <- auth
+SELECT alerts … WHERE instances.clientId IN (SELECT clients_1.id …)   <- the request
+```
+
+##### Measured — the plans
+
+`EXPLAIN QUERY PLAN` on the statements that listener captured, run against the seeded
+schema:
+
+```
+alerts count   before   SEARCH instances USING COVERING INDEX ix_instances_clientId_status (clientId=?)
+                        SEARCH alerts USING COVERING INDEX ix_alerts_instanceId_alertType_isResolved (instanceId=?)
+
+               after    SEARCH instances USING COVERING INDEX ix_instances_clientId_status (clientId=?)
+                        LIST SUBQUERY 1
+                          SEARCH clients_1 USING COVERING INDEX ix_clients_managerId (managerId=?)
+                          CREATE BLOOM FILTER
+                        SEARCH alerts USING COVERING INDEX ix_alerts_instanceId_alertType_isResolved (instanceId=?)
+```
+
+The outer plan is unchanged; what appears inside it is the scope lookup, and it is the same
+covering-index seek on `ix_clients_managerId` that [PERF-04](#perf-04) bought for it when it
+was a statement of its own. `LIST SUBQUERY`, not `CORRELATED LIST SUBQUERY` — SQLite
+materialises it once per statement, not once per row. The scoped instance list and the
+scoped client list plan the same way: outer plan identical, the same seek added inside.
+
+One thing this removes that no plan shows: the old form carried **one bind parameter per
+client the manager owns**. Manager 1 owns 5 clients in the seed, and the pre-fix statements
+read `IN (?, ?, ?, ?, ?)` — the list grows with the assignment, against SQLite's cap of
+32,766 bind parameters per statement. The subquery is one parameter whatever the manager
+owns.
+
+##### Verification
+
+All 125 functional tests pass — the 124 that existed, unchanged, plus one added here. The
+unchanged 124 are what make this safe: `test_client_list_is_scoped_by_role`,
+`test_client_list_pagination_counts_only_the_callers_clients` and the scoped `total` and id
+assertions across [tests/test_alerts.py](../../tests/test_alerts.py),
+[tests/test_instances.py](../../tests/test_instances.py) and
+[tests/test_member_c.py](../../tests/test_member_c.py) pin exactly what a mis-scoped filter
+would break — one manager seeing another manager's rows.
+
+The gap they left is the case the sentinel existed for, so it is now a test rather than a
+`-1`: `test_a_manager_with_no_clients_sees_nothing` in
+[tests/test_clients.py](../../tests/test_clients.py) registers a `CLIENT_MANAGER` with no
+clients assigned and asserts that every scoped list, and the report, comes back empty. It
+guards the scope mechanism rather than this fix in particular — losing the filter entirely
+is the failure mode where an empty scope stops meaning "nothing" and starts meaning
+"everything". Measured on both checkouts: identical empty responses before and after.
+
+##### What this does not fix
+
+The `members` lookup, by design — the first statement in the trace above is still there,
+and re-reading the row is what makes an invalidated member's token stop working.
+
+[PERF-11](#perf-11) is untouched: it is the other half of the original step 8, and the lazy
+loads it describes are still one query each, so a single-object request like
+`GET /api/instances/1` still issues three. What this fix changes for it is the shape of the
+remedy that finding proposes — see there.
+
 ---
 
 ### PERF-11
@@ -1041,13 +1172,19 @@ the row is what makes "member no longer exists" work), so it should stay — ind
 `assert_client_access(member, instance.client)` needs a `Client` object, so accessing
 `.client` fires a lazy load. Measured, `GET /api/instances/1` — 3 queries, the third being
 that load. `resolve_alert` is worse: `alert.instance.client`
-([alert_controller.py:49](../../app/controllers/alert_controller.py#L49)) is two chained
+([alert_controller.py:57](../../app/controllers/alert_controller.py#L57)) is two chained
 lazy loads.
 
 **Fix.** `assert_client_access` reads exactly one field, `client.managerId`. An overload
-taking the id — checked against the accessible-id set the request already computes
-([PERF-10](#perf-10)) — removes the load entirely. Where the object is genuinely needed,
-`joinedload(Instance.client)` folds it into the original query.
+taking the id — checked with an `EXISTS` over the scope subquery
+[PERF-10](#perf-10) now returns — removes the load entirely. Where the object is genuinely
+needed, `joinedload(Instance.client)` folds it into the original query.
+
+(Written before PERF-10 landed, this proposed checking the id against "the accessible-id
+set the request already computes". There is no such set any more — the scope is a `SELECT`
+that rides inside the query it filters, and a single-object endpoint has no query for it to
+ride in. The remedy is the same size, but it is a statement of its own rather than a free
+comparison: one `EXISTS`, replacing one lazy load, and two of them for `resolve_alert`.)
 
 ---
 
@@ -1055,7 +1192,7 @@ taking the id — checked against the accessible-id set the request already comp
 
 **Aggregates are computed in Python over fully loaded rows.**
 
-`get_cost_forecast` ([client_service.py:81](../../app/services/client_service.py#L81))
+`get_cost_forecast` ([client_service.py:104](../../app/services/client_service.py#L104))
 loads every `RUNNING` instance of a client as a full ORM object, then does nothing with
 those objects except count them by type. The response contains only counts and subtotals —
 not a single instance field. A `GROUP BY instanceType` returning `(type, count)` gives the
@@ -1142,7 +1279,8 @@ Ordered by benefit per unit of risk, not by severity.
 | 6 | Batch the alert dedup | [PERF-05](#perf-05) | Medium — touches the dedup rule — **done** |
 | 7 | Count without the sort | [PERF-08](#perf-08) | Low — **done**, with step 9 |
 | 8a | Conditional join | [PERF-09](#perf-09) | Low — **done** |
-| 8b | Scope filter as a subquery; drop the lazy loads | [PERF-10](#perf-10), [PERF-11](#perf-11) | Medium |
+| 8b | Scope filter as a subquery | [PERF-10](#perf-10) | Medium — **done** |
+| 8c | Drop the lazy loads | [PERF-11](#perf-11) | Medium |
 | 9 | Paginate the remaining list endpoints | [PERF-07](#perf-07) | **Breaking** — API contract — **done** |
 
 Steps 1–5 are schema and configuration; none of them changes any documented behaviour. Step 6
@@ -1156,11 +1294,15 @@ before six more endpoints started calling it.
 
 The order above was written before any of this landed, and step 9 ran out of turn: it was
 taken last as planned, but its own prerequisite — one place for the `page`/`size`
-convention to live — made step 7 free, so the two closed together. Step 8 then split:
-the conditional join is a self-contained move of two lines with no effect on any other
-finding, so it was taken on its own as **8a** and rated Low rather than Medium — the risk
-in the original step 8 lives entirely in the auth-path changes, which rewrite how scoping
-reaches the query. What remains is **8b**.
+convention to live — made step 7 free, so the two closed together. Step 8 then split three
+ways. The conditional join is a self-contained move of two lines with no effect on any
+other finding, so it was taken on its own as **8a** and rated Low rather than Medium — the
+risk in the original step 8 lives entirely in the auth-path changes, which rewrite how
+scoping reaches the query. Those changes then split again: **8b** rewrites how the scope
+*is expressed* and touches every list endpoint, **8c** rewrites how a *single object* is
+authorized and touches none of them, and neither needs the other. 8b is done; what remains
+is **8c**, and it is worth noting that 8b removed the thing 8c was originally going to
+lean on — see [PERF-11](#perf-11).
 
 ---
 
@@ -1218,6 +1360,17 @@ baseline. The scale rows were produced by seeding the demo data and then bulk-in
 same rows are matched by the warnings scan, carried by the alert history once scanned, and
 listed by that client's instances endpoint.
 
+The before/after counts under [PERF-10](#perf-10) come from that same listener run against
+**two checkouts**, as [PERF-07](#perf-07)'s did — a `git worktree` of the parent commit and
+the working tree, driven by the same script. Two checkouts rather than two factories in one
+process because the change is to a function signature, not to a value that can be swapped:
+`accessible_client_ids` loses its `db` parameter, so no monkeypatch can host both variants
+beside each other. Each endpoint is requested twice and the second request is the counted
+one, so a monitoring scan is counted as the repeat poll it will be in practice rather than
+on the call that records its alerts. The script compares `total`, the returned ids and the
+report's counts across the two checkouts before reporting any count, and the empty-scope
+run described under that finding was driven the same way.
+
 The before/after plans and latencies under [PERF-09](#perf-09) come from that listener
 again, with the pre-fix `list_alerts` — the unconditional join, restored as a monkeypatch —
 swapped in for one half of each pair, so both columns are measured in the same process on
@@ -1272,13 +1425,16 @@ the stand-in for the network call at the same instant; one of them reads
 `engine.pool.checkedout()` there. Running it with and without the early `db.close()`
 is the before/after table under [PERF-03](#perf-03).
 
-Caveats worth stating: most counts come from the 16-instance seed, so absolute numbers are
+Caveats worth stating: most counts come from the 15-instance seed, so absolute numbers are
 small — what matters is which of them **scale with the result set**. Nothing measured here
 still does. [PERF-05](#perf-05) and [PERF-06](#perf-06) made the statement count grow with
 the result, and [PERF-07](#perf-07) made the response and the working set grow with it;
 all three are fixed, and the grown-database rows under PERF-07 are there precisely because
-the seed is too small to show the difference. What remains unbounded by measurement rather
-than by fix is deep `OFFSET` paging and the two per-instance arrays in the cost and SLA
+the seed is too small to show the difference. [PERF-10](#perf-10) scaled with something
+else again — the caller's client assignment, one bind parameter per client, which no
+result-set figure would have shown; it is fixed, and the seed is too small to show that
+either, so the finding argues it from the statement shape rather than from a number. What
+remains unbounded by measurement rather than by fix is deep `OFFSET` paging and the two per-instance arrays in the cost and SLA
 responses, both recorded under [PERF-07](#perf-07). [PERF-09](#perf-09) is the exception
 to the "counts, not times" rule: it removes work from inside a statement without changing
 how many statements run, so a wall-clock figure is the only thing that can show it, and

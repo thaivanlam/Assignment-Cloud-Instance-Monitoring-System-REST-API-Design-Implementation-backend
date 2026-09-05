@@ -30,7 +30,7 @@ def list_alerts(
 ):
     items, total, total_pages = alert_service.list_alerts(
         db,
-        accessible_client_ids(member, db),
+        accessible_client_ids(member),
         page=page,
         size=size,
         alertType=alertType,

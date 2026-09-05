@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from datetime import timedelta
 
-from sqlalchemy import func, insert
+from sqlalchemy import Select, func, insert
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -141,7 +141,10 @@ def _commit_if_recorded(db: Session, recorded: bool) -> None:
 
 
 def check_warnings(
-    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+    db: Session,
+    client_ids: Select[tuple[int]] | None,
+    page: int = 1,
+    size: int = DEFAULT_SIZE,
 ) -> tuple[list[Instance], int, int]:
     """CPU >= 80% instances; auto-records a CPU_HIGH alert for each (skip if
     an unresolved CPU_HIGH alert already exists). Returns one page of the matches."""
@@ -150,7 +153,7 @@ def check_warnings(
         Instance.status == InstanceStatus.RUNNING,
     )
     if client_ids is not None:
-        query = query.filter(Instance.clientId.in_(client_ids or [-1]))
+        query = query.filter(Instance.clientId.in_(client_ids))
 
     return _scan(
         db, query, AlertType.CPU_HIGH,
@@ -163,13 +166,16 @@ def check_warnings(
 
 
 def check_errors(
-    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+    db: Session,
+    client_ids: Select[tuple[int]] | None,
+    page: int = 1,
+    size: int = DEFAULT_SIZE,
 ) -> tuple[list[Instance], int, int]:
     """ERROR status instances; auto-records a critical ERROR_DETECTED alert.
     Returns one page of the matches."""
     query = db.query(Instance).filter(Instance.status == InstanceStatus.ERROR)
     if client_ids is not None:
-        query = query.filter(Instance.clientId.in_(client_ids or [-1]))
+        query = query.filter(Instance.clientId.in_(client_ids))
 
     return _scan(
         db, query, AlertType.ERROR_DETECTED,
@@ -181,7 +187,10 @@ def check_errors(
 
 
 def check_long_stopped(
-    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+    db: Session,
+    client_ids: Select[tuple[int]] | None,
+    page: int = 1,
+    size: int = DEFAULT_SIZE,
 ) -> tuple[list[Instance], int, int]:
     """Instances STOPPED for 48+ hours (based on last status update time).
     Also records a LONG_STOPPED alert for visibility. Returns one page of the matches."""
@@ -192,7 +201,7 @@ def check_long_stopped(
         Instance.updatedAt <= threshold,
     )
     if client_ids is not None:
-        query = query.filter(Instance.clientId.in_(client_ids or [-1]))
+        query = query.filter(Instance.clientId.in_(client_ids))
 
     def stopped_message(inst: Instance) -> str:
         hours = (now - inst.updatedAt).total_seconds() / 3600
@@ -204,12 +213,12 @@ def check_long_stopped(
     return _scan(db, query, AlertType.LONG_STOPPED, stopped_message, page, size)
 
 
-def build_report(db: Session, client_ids: list[int] | None) -> dict:
+def build_report(db: Session, client_ids: Select[tuple[int]] | None) -> dict:
     inst_query = db.query(Instance)
     alert_query = db.query(Alert).join(Instance, Alert.instanceId == Instance.id)
     if client_ids is not None:
-        inst_query = inst_query.filter(Instance.clientId.in_(client_ids or [-1]))
-        alert_query = alert_query.filter(Instance.clientId.in_(client_ids or [-1]))
+        inst_query = inst_query.filter(Instance.clientId.in_(client_ids))
+        alert_query = alert_query.filter(Instance.clientId.in_(client_ids))
 
     status_counts = {s.value: 0 for s in InstanceStatus}
     rows = (

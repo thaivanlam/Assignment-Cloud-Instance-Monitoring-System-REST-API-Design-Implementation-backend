@@ -227,7 +227,7 @@ ticket all stay exploitable for the full window with no lever to pull.
 2. Add a `tokensValidAfter` timestamp per `Member`, and reject any token whose `iat`
    predates it. One column revokes every session for a user — what a password change or a
    compromise needs — and it costs nothing extra, because the row is already loaded on
-   every request ([deps.py:31](../../app/core/deps.py#L31)).
+   every request ([deps.py:32](../../app/core/deps.py#L32)).
 3. Move to short access tokens plus a refresh token, which is the only option that makes
    revocation cheap in the general case. It changes the client contract, so it belongs in
    the same change as [SEC-14](#sec-14) and an update to
@@ -467,7 +467,7 @@ valid signature, no 'sub' claim -> unhandled KeyError: 'sub'  (FastAPI returns 5
 
 `get_current_member` handles `ExpiredSignatureError` and `InvalidTokenError` and then
 indexes the payload directly: `db.get(Member, int(payload["sub"]))`
-([deps.py:31](../../app/core/deps.py#L31)). A payload with no `sub` raises `KeyError`; one
+([deps.py:32](../../app/core/deps.py#L32)). A payload with no `sub` raises `KeyError`; one
 whose `sub` is not numeric raises `ValueError`. Neither is a `jwt` exception, so neither is
 caught, and a malformed-but-authentic token produces a `500` where the honest answer is
 `401`.
@@ -566,7 +566,7 @@ own trades one problem for another.
 incomplete.**
 
 The API issues a bearer token and reads it from the `Authorization` header
-([deps.py:10](../../app/core/deps.py#L10)). **It sets no cookies at all** — so the usual
+([deps.py:11](../../app/core/deps.py#L11)). **It sets no cookies at all** — so the usual
 questions about `HttpOnly`, `Secure` and `SameSite` do not apply here, and neither does
 CSRF, which is worth stating so it is clear it was considered rather than missed.
 
@@ -596,8 +596,8 @@ only raw `execute` calls are the two fixed `PRAGMA` statements in
 [database.py:63-64](../../app/database.py#L63-L64), which take no input. The one place a
 caller names a database object is the `sort` parameter of `GET /api/instances`, and it is
 checked against a whitelist before `getattr` ever sees it
-([instance_service.py:13-21](../../app/services/instance_service.py#L13-L21),
-[instance_service.py:66-70](../../app/services/instance_service.py#L66-L70)); an unknown
+([instance_service.py:14-22](../../app/services/instance_service.py#L14-L22),
+[instance_service.py:67-71](../../app/services/instance_service.py#L67-L71)); an unknown
 field falls back to `id` rather than raising or interpolating. Filters compare against
 Pydantic-validated enums and typed values. This is the right shape, and any future raw SQL
 should be measured against it.
@@ -619,7 +619,7 @@ for both failure modes ([SEC-09](#sec-09) is the timing, not the wording).
 
 **The database is authoritative for role and existence, not the token.**
 `get_current_member` re-loads the `Member` on every request
-([deps.py:31-33](../../app/core/deps.py#L31-L33)) and `require_admin` reads `member.role`
+([deps.py:32-34](../../app/core/deps.py#L32-L34)) and `require_admin` reads `member.role`
 from that row, so the `role` claim inside the token is decoration. Verified:
 
 ```
@@ -630,9 +630,13 @@ same token after it becomes CLIENT_MANAGER again     -> 403
 
 A demotion and a deleted account both take effect on the next request, with no token
 involvement. This is what makes the `tokensValidAfter` fix under [SEC-04](#sec-04) cheap —
-the row is already there. It costs two queries per request, recorded as PERF-10 and PERF-11
-in the performance review, and those two queries are what buys this property; that trade is
-worth making explicitly rather than optimising away by trusting the claim.
+the row is already there. It costs one query per request, and that query is what buys the
+property; the trade is worth making explicitly rather than optimising away by trusting the
+claim. The performance review looked at both halves of the auth path and kept this one on
+those grounds: the scope lookup beside it was removable and was removed
+([../performance/PERFORMANCE_BUGS.md § PERF-10](../performance/PERFORMANCE_BUGS.md#perf-10)),
+the relationship loads on the single-object path are still open
+([§ PERF-11](../performance/PERFORMANCE_BUGS.md#perf-11)), and this re-read stays.
 
 **Authorization is applied, and applied in the right place.** Every scoped endpoint calls
 `assert_client_access` or filters by `accessible_client_ids`, and the list endpoints scope

@@ -1,5 +1,6 @@
 
 
+from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from app.config import SLA_THRESHOLDS, UNIT_PRICES
@@ -33,12 +34,15 @@ def create_client(db: Session, data: ClientCreate) -> Client:
 
 
 def list_clients(
-    db: Session, client_ids: list[int] | None, page: int = 1, size: int = DEFAULT_SIZE
+    db: Session,
+    client_ids: Select[tuple[int]] | None,
+    page: int = 1,
+    size: int = DEFAULT_SIZE,
 ) -> tuple[list[Client], int, int]:
     """One page of the clients the caller can see, ordered by `id`."""
     query = db.query(Client)
     if client_ids is not None:
-        query = query.filter(Client.id.in_(client_ids or [-1]))
+        query = query.filter(Client.id.in_(client_ids))
     return paginate(query.order_by(Client.id), Client.id, page, size)
 
 

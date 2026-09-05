@@ -28,15 +28,23 @@ distinction matters when reasoning about what a manager can observe.
 
 ### 2.1 List endpoints — filter at the query
 
-`accessible_client_ids(member, db)` returns:
+`accessible_client_ids(member)` returns:
 
 - `None` for `ADMIN` — meaning *no filter*, and the caller sees every row;
-- a list of client ids for `CLIENT_MANAGER`, pushed into a SQL `WHERE ... IN (...)`.
+- for `CLIENT_MANAGER`, a `SELECT` of their client ids, pushed into a SQL
+  `WHERE ... IN (...)` as a subquery.
 
-A manager with **zero** clients yields an empty list, which the services translate to
-`IN (-1)` — an id that can never match. The result is an empty response, never an
-unfiltered one. That guard is why the empty case is safe rather than accidentally
-permissive.
+The scope is a query rather than a list of ids, so it is resolved inside the statement it
+filters instead of being fetched first — the request that used to cost the caller an extra
+round trip now costs none (docs/performance/PERFORMANCE_BUGS.md § PERF-10). What it
+*means* is unchanged: `None` still lets everything through, and a manager still sees only
+their own clients' rows.
+
+A manager with **zero** clients yields a subquery that selects no rows, and `IN` over no
+rows matches nothing. The result is an empty response, never an unfiltered one — the empty
+case is safe rather than accidentally permissive, and
+`test_a_manager_with_no_clients_sees_nothing` in
+[../../tests/test_clients.py](../../tests/test_clients.py) is what keeps it that way.
 
 Endpoints on this path: `GET /api/instances`, `GET /api/clients`, `GET /api/alerts`, and
 all four `GET /api/monitor/*`.

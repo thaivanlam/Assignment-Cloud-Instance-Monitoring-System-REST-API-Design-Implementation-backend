@@ -213,17 +213,24 @@ other.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 29 | `get_current_member` | [deps.py:13](../../app/core/deps.py#L13) | Bearer token → decode → load the `Member` row. Three distinct 401s: no credentials, expired, invalid. It re-reads the member on every request, so a deleted member's token stops working immediately. |
-| 30 | `require_admin` | [deps.py:36](../../app/core/deps.py#L36) | Depends on the previous one and adds a role check. Used by exactly one endpoint: `POST /api/clients`. |
-| 31 | `assert_client_access` | [deps.py:42](../../app/core/deps.py#L42) | **The single-object guard.** ADMIN passes; a `CLIENT_MANAGER` passes only if `client.managerId == member.id`. It runs *after* the entity is loaded — so a manager asking for someone else's instance gets `403`, not `404`. |
-| 32 | `accessible_client_ids` | [deps.py:53](../../app/core/deps.py#L53) | **The list guard.** Returns `None` for ADMIN, meaning *no filter*; otherwise the manager's client ids. |
+| 29 | `get_current_member` | [deps.py:14](../../app/core/deps.py#L14) | Bearer token → decode → load the `Member` row. Three distinct 401s: no credentials, expired, invalid. It re-reads the member on every request, so a deleted member's token stops working immediately. |
+| 30 | `require_admin` | [deps.py:37](../../app/core/deps.py#L37) | Depends on the previous one and adds a role check. Used by exactly one endpoint: `POST /api/clients`. |
+| 31 | `assert_client_access` | [deps.py:43](../../app/core/deps.py#L43) | **The single-object guard.** ADMIN passes; a `CLIENT_MANAGER` passes only if `client.managerId == member.id`. It runs *after* the entity is loaded — so a manager asking for someone else's instance gets `403`, not `404`. |
+| 32 | `accessible_client_ids` | [deps.py:54](../../app/core/deps.py#L54) | **The list guard.** Returns `None` for ADMIN, meaning *no filter*; otherwise a `SELECT` of the manager's client ids. It takes no `Session` — it builds the lookup and the caller's query runs it. |
 
-**The `None` convention, and the `[-1]` trick.** Every service that lists rows takes
-`client_ids: list[int] | None`. `None` means "apply no filter" (ADMIN); a list means
-"filter to these". An *empty* list — a manager with no clients — would make `IN ()`
-invalid SQL, so the services write `Instance.clientId.in_(client_ids or [-1])`: an id that
-matches nothing. That exact expression appears eight times from Stage 4 onward; recognise
-it once here and it never needs re-reading.
+**The `None` convention.** Every service that lists rows takes
+`client_ids: Select[tuple[int]] | None`. `None` means "apply no filter" (ADMIN); a
+`SELECT` means "filter to the clients it returns", and the services write
+`Instance.clientId.in_(client_ids)`. That exact expression appears eight times from Stage 4
+onward; recognise it once here and it never needs re-reading.
+
+Two things follow from the scope being a query rather than a list of ids. It costs no
+statement of its own — it is resolved inside the query it filters, which is the whole point
+of [../performance/PERFORMANCE_BUGS.md § PERF-10](../performance/PERFORMANCE_BUGS.md#perf-10).
+And the empty case needs no special handling: a manager with no clients produces a subquery
+that selects nothing, and `IN` over nothing matches nothing. Earlier revisions of this
+walkthrough described a `[-1]` sentinel here for exactly that case; it is gone, and
+`test_a_manager_with_no_clients_sees_nothing` guards what it used to.
 
 **Two guards, two situations:** `assert_client_access` for one known object,
 `accessible_client_ids` for a query. Every endpoint uses exactly one of them. The rules in
@@ -243,12 +250,12 @@ seconds once the service is known.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 33 | `SORTABLE_FIELDS` | [instance_service.py:11](../../app/services/instance_service.py#L11) | An allow-list. `sort` is user input used to pick a column, so an unknown field silently falls back to `id` instead of reaching `getattr`. |
-| 34 | `create_instance` | [instance_service.py:17](../../app/services/instance_service.py#L17) | Validates the client exists, then sets `monthlyCost` from `UNIT_PRICES` at creation time — cost is *derived once and stored*, never recomputed on read. |
-| 35 | `list_instances` | [instance_service.py:39](../../app/services/instance_service.py#L39) | The one function to read closely: role filter → four optional filters → `-field` descending sort → `paginate()`. Note the `id` appended after the sort column: most sortable fields are not unique, and rows tied on the sort key have no defined order, so without a unique last key a row could be served on two pages or on none. Returns `(items, total, total_pages)` for the controller to wrap in `PageResponse`. |
-| 36 | `get_instance` | [instance_service.py:82](../../app/services/instance_service.py#L82) | Load or `NotFoundException`. Used by the two functions below and by four controllers — the single load-or-404 point. |
-| 37 | `update_status` | [instance_service.py:89](../../app/services/instance_service.py#L89) | **Read the comment at line 92.** A PATCH that changes nothing returns early without touching `updatedAt`, because Stage 5 treats `updatedAt` as "when the status last changed". Without this guard, polling the same PATCH would reset the 48-hour clock forever. Also: moving to a non-RUNNING status zeroes `cpuUsage` unless one is supplied. |
-| 38 | `delete_instance` | [instance_service.py:114](../../app/services/instance_service.py#L114) | The assignment's headline rule: `RUNNING` → `ActiveInstanceException` → `409`. Alerts cascade away with the row. |
+| 33 | `SORTABLE_FIELDS` | [instance_service.py:12](../../app/services/instance_service.py#L12) | An allow-list. `sort` is user input used to pick a column, so an unknown field silently falls back to `id` instead of reaching `getattr`. |
+| 34 | `create_instance` | [instance_service.py:18](../../app/services/instance_service.py#L18) | Validates the client exists, then sets `monthlyCost` from `UNIT_PRICES` at creation time — cost is *derived once and stored*, never recomputed on read. |
+| 35 | `list_instances` | [instance_service.py:40](../../app/services/instance_service.py#L40) | The one function to read closely: role filter → four optional filters → `-field` descending sort → `paginate()`. Note the `id` appended after the sort column: most sortable fields are not unique, and rows tied on the sort key have no defined order, so without a unique last key a row could be served on two pages or on none. Returns `(items, total, total_pages)` for the controller to wrap in `PageResponse`. |
+| 36 | `get_instance` | [instance_service.py:83](../../app/services/instance_service.py#L83) | Load or `NotFoundException`. Used by the two functions below and by four controllers — the single load-or-404 point. |
+| 37 | `update_status` | [instance_service.py:90](../../app/services/instance_service.py#L90) | **Read the comment at line 93.** A PATCH that changes nothing returns early without touching `updatedAt`, because Stage 5 treats `updatedAt` as "when the status last changed". Without this guard, polling the same PATCH would reset the 48-hour clock forever. Also: moving to a non-RUNNING status zeroes `cpuUsage` unless one is supplied. |
+| 38 | `delete_instance` | [instance_service.py:115](../../app/services/instance_service.py#L115) | The assignment's headline rule: `RUNNING` → `ActiveInstanceException` → `409`. Alerts cascade away with the row. |
 
 ### 4.2 `app/controllers/instance_controller.py`
 
@@ -303,8 +310,8 @@ in the project, and the one whose four private helpers explain the other four fu
 | 47 | `_scan` | [monitor_service.py:81](../../app/services/monitor_service.py#L81) | **The stop that explains the three below.** Read its docstring first. A scan records an alert for *every* matching instance but returns only one page of them — paginating the recording would mean an instance on page 8 never raising an alert. It walks the matches in id-keyset batches, so `total` and the page fall out of a walk it was making anyway, and it holds one batch in memory rather than the whole result set: [../performance/PERFORMANCE_BUGS.md § PERF-07](../performance/PERFORMANCE_BUGS.md#perf-07). |
 | 48 | `_commit_if_recorded` | [monitor_service.py:132](../../app/services/monitor_service.py#L132) | Commits a scan **only if** it actually inserted something. A poll that dedup silenced writes nothing, so it must not take SQLite's write lock either — why this exists: [../performance/PERFORMANCE_BUGS.md § PERF-01](../performance/PERFORMANCE_BUGS.md#perf-01). |
 | 49 | `check_warnings` | [monitor_service.py:143](../../app/services/monitor_service.py#L143) | `cpuUsage >= 80` **and** status `RUNNING` — a stopped instance's stale CPU reading never warns. Builds the query and hands it to `_scan`, which records `CPU_HIGH` for every hit with at most one `commit` — and none at all when dedup skipped every insert. |
-| 50 | `check_errors` | [monitor_service.py:165](../../app/services/monitor_service.py#L165) | Status `ERROR` → `ERROR_DETECTED`, message prefixed `[CRITICAL]`. |
-| 51 | `check_long_stopped` | [monitor_service.py:183](../../app/services/monitor_service.py#L183) | `STOPPED` and `updatedAt <= now - 48h` → `LONG_STOPPED`. This is the function that depends on the idempotent-PATCH guard from stop 37; read the two as a pair. |
+| 50 | `check_errors` | [monitor_service.py:168](../../app/services/monitor_service.py#L168) | Status `ERROR` → `ERROR_DETECTED`, message prefixed `[CRITICAL]`. |
+| 51 | `check_long_stopped` | [monitor_service.py:189](../../app/services/monitor_service.py#L189) | `STOPPED` and `updatedAt <= now - 48h` → `LONG_STOPPED`. This is the function that depends on the idempotent-PATCH guard from stop 37; read the two as a pair. |
 | 52 | `build_report` | [monitor_service.py:207](../../app/services/monitor_service.py#L207) | Read-only, unlike the three above. Counts by status via `GROUP BY`, warning count, `SUM(monthlyCost)` wrapped in `coalesce` so an empty scope returns `0.0` rather than `None`, and unresolved alerts newest-first. `unresolvedAlertCount` is a `func.count()`, not the length of the array beside it: that array is capped at `REPORT_ALERT_LIMIT`, so the two can differ and the count is the honest one. |
 
 **The surprise worth internalising:** three of these are `GET` endpoints that *write* to the
@@ -314,7 +321,7 @@ trade-offs: [../business-rules/ALERTING.md](../business-rules/ALERTING.md).
 
 **Controller** —
 [app/controllers/monitor_controller.py](../../app/controllers/monitor_controller.py): four
-endpoints, each passing `accessible_client_ids(member, db)` straight through. The first
+endpoints, each passing `accessible_client_ids(member)` straight through. The first
 three also take `page`/`size` and wrap the result in `PageResponse`; `report` does not,
 because it is one aggregate object rather than a list.
 
@@ -334,8 +341,8 @@ The consumer side of what Stage 5 produces.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 57 | `list_alerts` | [alert_service.py:11](../../app/services/alert_service.py#L11) | Alerts carry no `clientId`, so scoping needs `join(Instance)` — the join *is* the role filter, which is why it is made inside the scope branch rather than above it: an `ADMIN` has no scope and gets no join (PERF-09). Dropping it for that role is safe only because no alert outlives its instance. Date filters widen a `date` to `time.min` / `time.max`, so `dateTo` includes the whole day. The sort is `detectedAt` **then `id`**: a scan stamps every alert it writes with the same instant, so here ties are the rule rather than the exception, and a page boundary inside a tie would otherwise be undefined. |
-| 58 | `resolve_alert` | [alert_service.py:53](../../app/services/alert_service.py#L53) | Idempotent: an already-resolved alert is returned unchanged, and `resolvedAt` is not overwritten. |
+| 57 | `list_alerts` | [alert_service.py:12](../../app/services/alert_service.py#L12) | Alerts carry no `clientId`, so scoping needs `join(Instance)` — the join *is* the role filter, which is why it is made inside the scope branch rather than above it: an `ADMIN` has no scope and gets no join (PERF-09). Dropping it for that role is safe only because no alert outlives its instance. Date filters widen a `date` to `time.min` / `time.max`, so `dateTo` includes the whole day. The sort is `detectedAt` **then `id`**: a scan stamps every alert it writes with the same instant, so here ties are the rule rather than the exception, and a page boundary inside a tie would otherwise be undefined. |
+| 58 | `resolve_alert` | [alert_service.py:54](../../app/services/alert_service.py#L54) | Idempotent: an already-resolved alert is returned unchanged, and `resolvedAt` is not overwritten. |
 
 **Controller** —
 [app/controllers/alert_controller.py](../../app/controllers/alert_controller.py):
@@ -354,15 +361,15 @@ and the last two hold the only real arithmetic in the codebase.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 61 | `create_client` | [client_service.py:13](../../app/services/client_service.py#L13) | The `ValidationException` case: `managerId` must belong to a member whose role is `CLIENT_MANAGER`. Assigning a client to an ADMIN is `400`, not `422` — the check needs the database. |
-| 62 | `list_clients` | [client_service.py:35](../../app/services/client_service.py#L35) | The `None` / `or [-1]` convention again, then `paginate()`. |
-| 63 | `get_client` | [client_service.py:45](../../app/services/client_service.py#L45) | Load-or-404, used by all four below and by `create_instance`. |
-| 64 | `_client_instances_query` | [client_service.py:52](../../app/services/client_service.py#L52) | The shared query behind the next two stops. It returns a query rather than a list, which is the whole point: one caller pages it and the others cannot. |
-| 65 | `get_client_instances` | [client_service.py:57](../../app/services/client_service.py#L57) | Validates the client first, so a missing client gives `404` rather than an empty list. Deliberately **unpaginated** — read its docstring for why the cost and SLA calculations below cannot take a page. |
-| 66 | `list_client_instances` | [client_service.py:68](../../app/services/client_service.py#L68) | The paginated form, and the only one an endpoint serves directly. Reading it against the stop above is the clearest illustration in the codebase of when pagination applies and when it cannot. |
-| 67 | `get_client_cost` | [client_service.py:76](../../app/services/client_service.py#L76) | Sums the **stored** `monthlyCost` of *all* instances regardless of status, plus a per-instance breakdown. |
-| 68 | `get_cost_forecast` | [client_service.py:100](../../app/services/client_service.py#L100) | The contrast that matters: the forecast counts **only `RUNNING`** instances, priced from `UNIT_PRICES`. Current cost ≠ forecast, by design — [../business-rules/COST.md](../business-rules/COST.md) explains why. |
-| 69 | `get_sla` | [client_service.py:133](../../app/services/client_service.py#L133) | **Read the docstring before the code.** There is no status-history table, so uptime is approximated: the window runs `max(month start, launchedAt)` → now; an instance counts as up until now if `RUNNING`, or until `updatedAt` otherwise. The client figure is the mean across instances, compared against its plan threshold. An honest approximation, documented as one in [../business-rules/SLA.md](../business-rules/SLA.md). |
+| 61 | `create_client` | [client_service.py:14](../../app/services/client_service.py#L14) | The `ValidationException` case: `managerId` must belong to a member whose role is `CLIENT_MANAGER`. Assigning a client to an ADMIN is `400`, not `422` — the check needs the database. |
+| 62 | `list_clients` | [client_service.py:36](../../app/services/client_service.py#L36) | The `None` / scope-subquery convention again, then `paginate()`. |
+| 63 | `get_client` | [client_service.py:49](../../app/services/client_service.py#L49) | Load-or-404, used by all four below and by `create_instance`. |
+| 64 | `_client_instances_query` | [client_service.py:56](../../app/services/client_service.py#L56) | The shared query behind the next two stops. It returns a query rather than a list, which is the whole point: one caller pages it and the others cannot. |
+| 65 | `get_client_instances` | [client_service.py:61](../../app/services/client_service.py#L61) | Validates the client first, so a missing client gives `404` rather than an empty list. Deliberately **unpaginated** — read its docstring for why the cost and SLA calculations below cannot take a page. |
+| 66 | `list_client_instances` | [client_service.py:72](../../app/services/client_service.py#L72) | The paginated form, and the only one an endpoint serves directly. Reading it against the stop above is the clearest illustration in the codebase of when pagination applies and when it cannot. |
+| 67 | `get_client_cost` | [client_service.py:80](../../app/services/client_service.py#L80) | Sums the **stored** `monthlyCost` of *all* instances regardless of status, plus a per-instance breakdown. |
+| 68 | `get_cost_forecast` | [client_service.py:104](../../app/services/client_service.py#L104) | The contrast that matters: the forecast counts **only `RUNNING`** instances, priced from `UNIT_PRICES`. Current cost ≠ forecast, by design — [../business-rules/COST.md](../business-rules/COST.md) explains why. |
+| 69 | `get_sla` | [client_service.py:137](../../app/services/client_service.py#L137) | **Read the docstring before the code.** There is no status-history table, so uptime is approximated: the window runs `max(month start, launchedAt)` → now; an instance counts as up until now if `RUNNING`, or until `updatedAt` otherwise. The client figure is the mean across instances, compared against its plan threshold. An honest approximation, documented as one in [../business-rules/SLA.md](../business-rules/SLA.md). |
 
 **Controller** —
 [app/controllers/client_controller.py](../../app/controllers/client_controller.py). Six
@@ -456,7 +463,7 @@ Answer these from memory before moving on. If one is hard, the stage to re-read 
 |---:|---|---|
 | 1 | A service raises `NotFoundException`. Where does it become a `404`? | 1 |
 | 2 | Why is `utcnow()` naive rather than timezone-aware? | 2 |
-| 3 | What does `client_ids = None` mean, and why `or [-1]`? | 3 |
+| 3 | What does `client_ids = None` mean, and what does a manager with no clients match? | 3 |
 | 4 | A manager requests another manager's instance — `403` or `404`, and why? | 3, 4 |
 | 5 | Why does an unchanged `PATCH /status` deliberately do nothing? | 4, 5 |
 | 6 | Why does calling `/monitor/warnings` twice create only one alert? | 5 |
@@ -478,7 +485,7 @@ reading the linked document first.
 | `cost_snapshots` written but never read | A known, deliberate gap | [../design/ERD.md](../design/ERD.md) |
 | Two different error body shapes | Handler-produced vs. raw `HTTPException` | [../api/ERRORS.md](../api/ERRORS.md) |
 | SLA uptime called "approximate" | No status-history table exists to be exact against | [../business-rules/SLA.md](../business-rules/SLA.md) |
-| `in_(client_ids or [-1])` | Guards against invalid `IN ()` for a manager with no clients | [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md) |
+| `in_(client_ids)` over a `SELECT`, not a list | The scope rides inside the query instead of costing one of its own | [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md), [../performance/PERFORMANCE_BUGS.md § PERF-10](../performance/PERFORMANCE_BUGS.md#perf-10) |
 | Cost stored on the row, not computed | Priced once at creation, from `UNIT_PRICES` | [../business-rules/COST.md](../business-rules/COST.md) |
 
 ---
