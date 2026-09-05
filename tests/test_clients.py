@@ -8,8 +8,7 @@ from datetime import timedelta
 
 import pytest
 
-from app.core.security import hash_password
-from app.models import Client, Member, Role
+from app.models import Client
 from app.models.models import utcnow
 
 
@@ -121,7 +120,7 @@ def test_client_list_is_scoped_by_role(api, auth_headers):
     assert admin.json()["total"] == 10
 
 
-def test_a_manager_with_no_clients_sees_nothing(api):
+def test_a_manager_with_no_clients_sees_nothing(api, empty_scope_headers):
     """An empty scope must match nothing — not everything.
 
     Every scoped list resolves the caller's clients as a subquery inside its own
@@ -129,21 +128,8 @@ def test_a_manager_with_no_clients_sees_nothing(api):
     clients makes that subquery empty, which is the case where a filter is easiest to
     lose: drop it and the caller sees the whole table.
     """
-    client, db = api
-    db.add(
-        Member(
-            email="nobody@techvalley.vn",
-            password=hash_password("manager123!"),
-            name="No Clients",
-            role=Role.CLIENT_MANAGER,
-        )
-    )
-    db.commit()
-    token = client.post(
-        "/api/auth/login",
-        json={"email": "nobody@techvalley.vn", "password": "manager123!"},
-    ).json()["accessToken"]
-    headers = {"Authorization": f"Bearer {token}"}
+    client, _ = api
+    headers = empty_scope_headers
 
     for path in (
         "/api/clients",

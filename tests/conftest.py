@@ -7,7 +7,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import seed as seed_module
+from app.core.security import hash_password
 from app.database import Base, get_db
+from app.models import Member, Role
 from app.main import app
 from app.seed import seed
 
@@ -85,3 +87,30 @@ def auth_headers(api):
         "manager1": login("lam@techvalley.vn", "manager123!"),
         "manager2": login("minh@techvalley.vn", "manager123!"),
     }
+
+
+@pytest.fixture
+def empty_scope_headers(api):
+    """Bearer headers for a CLIENT_MANAGER the seed assigns no clients to.
+
+    The scope of such a caller is empty, which is the case both authorization guards are
+    easiest to get wrong: an empty scope has to keep meaning *nothing*, where losing the
+    check entirely makes it mean *everything*
+    (docs/business-rules/AUTHORIZATION.md, docs/performance/PERFORMANCE_BUGS.md
+    § PERF-10 and § PERF-11).
+    """
+    client, db = api
+    db.add(
+        Member(
+            email="nobody@techvalley.vn",
+            password=hash_password("manager123!"),
+            name="No Clients",
+            role=Role.CLIENT_MANAGER,
+        )
+    )
+    db.commit()
+    token = client.post(
+        "/api/auth/login",
+        json={"email": "nobody@techvalley.vn", "password": "manager123!"},
+    ).json()["accessToken"]
+    return {"Authorization": f"Bearer {token}"}

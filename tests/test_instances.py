@@ -275,6 +275,37 @@ def test_get_instance_enforces_scope_and_existence(api, auth_headers):
     assert missing.json()["detail"] == "Instance 999 not found"
 
 
+def test_a_manager_with_no_clients_reaches_no_single_instance(api, empty_scope_headers):
+    """An empty scope must forbid every single-object endpoint, not wave them through.
+
+    The guard on these four asks the database whether the instance's `clientId` is in the
+    caller's scope rather than loading the client to compare `managerId`
+    (docs/performance/PERFORMANCE_BUGS.md § PERF-11). A caller who owns no clients is the
+    case that separates "the scope is empty" from "there is no scope": the first must be
+    403 on every one of them, and instance 1 is left untouched to prove the writes were
+    rejected before they ran.
+    """
+    client, db = api
+    headers = empty_scope_headers
+
+    responses = {
+        "get": client.get("/api/instances/1", headers=headers),
+        "status": client.patch(
+            "/api/instances/1/status", headers=headers, json={"status": "STOPPED"}
+        ),
+        "delete": client.delete("/api/instances/13", headers=headers),
+        "diagnosis": client.get("/api/instances/6/diagnosis", headers=headers),
+    }
+
+    for name, response in responses.items():
+        assert response.status_code == 403, name
+        assert response.json()["detail"] == (
+            "CLIENT_MANAGER can only access clients assigned to them"
+        ), name
+    assert db.get(Instance, 1).status.value == "RUNNING"
+    assert db.get(Instance, 13) is not None
+
+
 # --------------------------------------------------------------------- status update
 
 

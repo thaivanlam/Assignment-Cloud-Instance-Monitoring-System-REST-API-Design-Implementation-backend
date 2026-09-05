@@ -9,7 +9,7 @@ attacker can reach, how it was reproduced, and what closing it would take.
 
 ## The short version
 
-Everything in `SECURITY_BUGS.md` is a security defect, not a functional one — all 125
+Everything in `SECURITY_BUGS.md` is a security defect, not a functional one — all 127
 tests pass and every endpoint returns the answer its documentation promises. Two findings
 are rated critical, and both are the same failure in different clothes: **authentication
 can be bypassed entirely without touching the API's logic.**

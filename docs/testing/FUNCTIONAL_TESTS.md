@@ -102,7 +102,7 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-125 cases across six files. Each file covers one area of the API.
+127 cases across six files. Each file covers one area of the API.
 
 ### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
 
@@ -121,7 +121,7 @@ are what keeps those documents honest.
 Rules: [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.2.
 
-### 4.2 `test_instances.py` — instance lifecycle and list conventions (37 cases)
+### 4.2 `test_instances.py` — instance lifecycle and list conventions (38 cases)
 
 | Case | Pins |
 |---|---|
@@ -146,6 +146,7 @@ Rules: [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md),
 | `instance_is_deleted_once_stopped` | `204` with an empty body, then `404` |
 | `deleting_an_instance_removes_its_alerts` | The alert cascade actually fires |
 | `delete_enforces_scope_and_existence` | `403` on another manager's STOPPED instance — the scope check runs before the delete |
+| `a_manager_with_no_clients_reaches_no_single_instance` | An empty scope forbids all four single-object endpoints. The guard asks the database whether the instance's client is in scope ([../performance/PERFORMANCE_BUGS.md § PERF-11](../performance/PERFORMANCE_BUGS.md#perf-11)), and a caller who owns nothing is where such a check is easiest to lose |
 
 Rules: [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFECYCLE.md),
 [../api/CONVENTIONS.md](../api/CONVENTIONS.md),
@@ -169,7 +170,7 @@ Rules: [../business-rules/INSTANCE_LIFECYCLE.md](../business-rules/INSTANCE_LIFE
 Rules: [../business-rules/ALERTING.md](../business-rules/ALERTING.md),
 [../team/MEMBER_C.md](../team/MEMBER_C.md).
 
-### 4.4 `test_alerts.py` — alert history and resolution (24 cases)
+### 4.4 `test_alerts.py` — alert history and resolution (25 cases)
 
 The `scanned` fixture runs all three monitoring scans as ADMIN first, producing the full
 set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
@@ -187,6 +188,7 @@ set of nine alerts (4 CPU_HIGH + 2 ERROR_DETECTED + 3 LONG_STOPPED).
 | `resolving_an_alert_stamps_it_once` | Resolving twice is accepted but `resolvedAt` does not move |
 | `resolving_removes_the_alert_from_the_report` | The report count drops from 9 to 8 |
 | `resolving_another_managers_alert_is_forbidden` | `403`, and the alert stays unresolved |
+| `a_manager_with_no_clients_resolves_nothing` | The same `403` for a caller with an empty scope — the alert guard reaches its client through the instance, so it is the two-hop version of the case above |
 | `resolving_an_unknown_alert_is_404` | Body is `{"detail": ...}` with **no** `error` key — the documented shape inconsistency |
 | `alert_history_is_paginated` | `size=4` over nine alerts: `4 / 4 / 1`, and `total` stays 9 on every page |
 | `alert_pages_partition_the_history_without_gaps_or_repeats` | Every alert of a scan carries the same `detectedAt`, so this passes only because `id` breaks the tie |
