@@ -5,14 +5,14 @@ it would take to fix.
 
 | Document | Contents |
 |---|---|
-| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 9 of 15 so far; a suggested order of work; the measurement method |
+| [PERFORMANCE_BUGS.md](PERFORMANCE_BUGS.md) | 15 measured findings ranked by severity, each with cause, evidence, and fix; a **Status** column saying which are fixed — 10 of 15 so far; a suggested order of work; the measurement method |
 
 ## The short version
 
 Everything in `PERFORMANCE_BUGS.md` is a performance defect, not a functional one — the
 tests pass and the API returns correct answers throughout. Three findings are rated
 critical, and all three are now fixed, as are all four high-severity ones and the first
-two medium:
+three medium:
 
 - **PERF-01** — *fixed.* The three `/api/monitor/*` endpoints are `GET`s that wrote and
   committed unconditionally, and SQLite ran with a rollback journal, so every dashboard
@@ -76,17 +76,25 @@ two medium:
   checked rather than assumed: `Instance.alerts` cascades its delete, no alert outlives its
   instance, and a test now pins it. The `ADMIN` plans lose the per-row `SEARCH instances`
   from both statements, and at 20,000 alerts the request falls from 5.7 ms to 4.5 ms.
+- **PERF-10** — *fixed.* A `CLIENT_MANAGER` request ran a query purely to fetch the ids of
+  the clients they manage, and then spent them as an `IN` list in the query it was about to
+  run anyway. That scope is now a `SELECT` handed to the same `IN`, resolved inside the
+  statement instead of before it: every `CLIENT_MANAGER` list endpoint fell from 4
+  statements to 3 and the report from 7 to 6, with the `ADMIN` path and every plan
+  unchanged. It also removes a bind parameter per client the manager owns. The `members`
+  lookup stays — re-reading the row is what makes a deleted member's token stop working
+  ([../business-rules/AUTHORIZATION.md § 2.1](../business-rules/AUTHORIZATION.md#21-list-endpoints--filter-at-the-query)).
 
 With PERF-05, PERF-06 and PERF-07 closed, neither a monitoring scan's statement count nor
-any list endpoint's response grows with the result set. The remaining seven findings are
-smaller: two unnecessary queries on the auth path (**PERF-10**, **PERF-11**), aggregation
+any list endpoint's response grows with the result set. The remaining five findings are
+smaller: a pair of lazy loads on the single-object auth path (**PERF-11**), aggregation
 done in Python (**PERF-12**), and notes recorded deliberately rather than as defects — the login KDF cost (**PERF-13**) is correct
 as written and should not be changed.
 
 Every figure is measured against the seeded demo database — or, where the seed is too
 small to show a difference, against that database grown with several thousand extra
 instances — not estimated; the method is at the end of the document so any number can be
-reproduced. Nine findings, PERF-01 through PERF-09, have been fixed; the rest are recorded
+reproduced. Ten findings, PERF-01 through PERF-10, have been fixed; the rest are recorded
 and still open. PERF-09 is the one whose payoff is a wall-clock number rather than a
 statement count — it removes work from inside a query without changing how many run.
 
