@@ -7,8 +7,8 @@ has never read the source.
 | Document | Contents |
 |---|---|
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Launching locally, on a single server and on Vercel; what a healthy start logs; the four calls that verify a deployment; upgrade, rollback, backup and reset |
-| [CONFIGURATION.md](CONFIGURATION.md) | Every setting and where it comes from; generating `SECRET_KEY`; the Anthropic key and its fallback; what `DATABASE_URL` selects; reading back the effective configuration |
-| [RUNBOOKS.md](RUNBOOKS.md) | Fifteen incident runbooks — symptom, cause, fix, verification — plus a 60-second triage, how to read the logs, and what to collect before escalating |
+| [CONFIGURATION.md](CONFIGURATION.md) | Every setting and where it comes from; generating `SECRET_KEY`; the Anthropic key and its fallback; what `DATABASE_URL` selects; when `REDIS_URL` is needed; reading back the effective configuration |
+| [RUNBOOKS.md](RUNBOOKS.md) | Seventeen incident runbooks — symptom, cause, fix, verification — plus a 60-second triage, how to read the logs, and what to collect before escalating |
 
 ## The short version
 
@@ -30,7 +30,9 @@ Three facts explain most of what an operator needs to know:
   anything public reaches the process.
 - **No external service is required.** The Anthropic key is optional: with none set, or a
   bad one, `GET /api/instances/{id}/diagnosis` returns a rule-based answer instead of
-  failing. Nothing else calls out.
+  failing. Redis is optional too — until there is more than one worker process: login
+  counters and revoked tokens live in process memory without it, so a logout would reach
+  only one worker ([CONFIGURATION.md § 6](CONFIGURATION.md#6-redis_url--shared-state)).
 
 Startup creates the schema, adds any missing index, and seeds the demo data if the database
 has no members. There is no migration step, so a changed column is the one upgrade that

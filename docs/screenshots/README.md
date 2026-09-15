@@ -20,7 +20,7 @@ python scripts/capture_swagger_ui.py --only instance_create    # terminal 2
 ```
 
 `--only` is a substring filter on the scenario name — the part of the filename after the
-number. Omit it to rebuild all 29, after deleting `monitoring.db` so the run starts from
+number. Omit it to rebuild all 31, after deleting `monitoring.db` so the run starts from
 a clean seed. Adding or removing a scenario also means adding or removing its row below.
 
 ## Auth
@@ -31,6 +31,12 @@ a clean seed. Adding or removing a scenario also means adding or removing its ro
 | [02_login_admin.png](02_login_admin.png) | `POST /api/auth/login` as ADMIN → `accessToken` |
 | [03_login_wrong_password.png](03_login_wrong_password.png) | `401` on bad credentials |
 | [28_instances_unauthorized_401.png](28_instances_unauthorized_401.png) | `401` with no Bearer token |
+| [30_logout_204.png](30_logout_204.png) | `POST /api/auth/logout` → `204`; the token is revoked |
+| [31_login_rate_limited_429.png](31_login_rate_limited_429.png) | `429` with `Retry-After` — the right password, after 10 failures |
+
+`30` and `31` run last on purpose: the first revokes the ADMIN token the run authorized
+with, and the second leaves `minh@techvalley.vn` locked out for 15 minutes. Restart the
+server (in-memory store) before re-running other scenarios against it.
 
 ## Clients
 

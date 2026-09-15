@@ -29,7 +29,8 @@ pip install -r requirements-dev.txt
 everything. Playwright is included for the screenshot script and is not needed by the
 tests — you can skip `playwright install`.
 
-No `.env`, no API key, and no running server are required. The suite starts its own
+No `.env`, no API key, no Redis and no running server are required — the Redis backend is
+tested against `fakeredis`, which `requirements-dev.txt` installs. The suite starts its own
 application instance in-process.
 
 ---

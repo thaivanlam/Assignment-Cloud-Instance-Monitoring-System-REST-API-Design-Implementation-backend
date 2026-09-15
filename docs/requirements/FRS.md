@@ -27,6 +27,7 @@ there rather than repeating the argument.
 | [F-AUTH-01](#f-auth-01--log-in) | Log in | `POST /api/auth/login` | Anonymous |
 | [F-AUTH-02](#f-auth-02--authenticate-a-request) | Authenticate a request | *(every protected endpoint)* | Any member |
 | [F-AUTH-03](#f-auth-03--health-check) | Health check | `GET /` | Anonymous |
+| [F-AUTH-04](#f-auth-04--log-out) | Log out | `POST /api/auth/logout` | Any member |
 | [F-INST-01](#f-inst-01--register-an-instance) | Register an instance | `POST /api/instances` | ADMIN, MANAGER |
 | [F-INST-02](#f-inst-02--list-instances) | List instances | `GET /api/instances` | ADMIN, MANAGER |
 | [F-INST-03](#f-inst-03--read-one-instance) | Read one instance | `GET /api/instances/{id}` | ADMIN, MANAGER |
@@ -173,7 +174,7 @@ Reference: [../api/ERRORS.md](../api/ERRORS.md).
 | **Endpoint** | `POST /api/auth/login` |
 | **Roles** | Anonymous |
 | **Realises** | FR-01, BR-06 |
-| **Verified by** | `login_returns_a_usable_token_with_role_and_name`, `login_rejects_bad_credentials_without_revealing_which_part_failed` |
+| **Verified by** | `login_returns_a_usable_token_with_role_and_name`, `login_rejects_bad_credentials_without_revealing_which_part_failed`, `login_is_refused_once_an_account_reaches_its_failure_limit`, `one_address_is_limited_across_many_accounts` |
 
 **Preconditions** — none. This is one of two endpoints reachable without a token.
 
@@ -186,12 +187,18 @@ Reference: [../api/ERRORS.md](../api/ERRORS.md).
 
 **Processing**
 
-1. Look up the member by email.
-2. Verify the password against the stored salted PBKDF2-SHA256 hash.
-3. If either step fails, answer `401` with **one** message that does not say which failed.
-4. Issue a JWT signed HS256 with claims `sub` (member id as a string), `email`, `role`,
-   and `exp` = now + `ACCESS_TOKEN_EXPIRE_MINUTES` (default 120).
-5. Return the token together with the member's role and display name, so a client can
+1. Count the attempt against the target account and the client address. If the account
+   has already had `LOGIN_MAX_FAILURES_PER_ACCOUNT` (10) or the address
+   `LOGIN_MAX_FAILURES_PER_IP` (50) within the current `LOGIN_WINDOW_SECONDS` (900) window,
+   answer `429` with `Retry-After` and **do not check the password**.
+2. Look up the member by email.
+3. Verify the password against the stored salted PBKDF2-SHA256 hash.
+4. If either step fails, log the email and address at `WARNING` and answer `401` with
+   **one** message that does not say which failed. The attempt stays counted.
+5. On success, clear the account's counter and give the address back its one attempt.
+6. Issue a JWT signed HS256 with claims `sub` (member id as a string), `email`, `role`,
+   `iat`, `exp` = now + `ACCESS_TOKEN_EXPIRE_MINUTES` (default 120), and a random `jti`.
+7. Return the token together with the member's role and display name, so a client can
    render the signed-in user without a second call.
 
 **Output** `200`
@@ -204,7 +211,7 @@ Reference: [../api/ERRORS.md](../api/ERRORS.md).
 | `name` | string | Display name |
 
 **Errors** — `401 Invalid email or password` (wrong email *or* wrong password) ·
-`422` malformed email.
+`422` malformed email · `429 Too many failed login attempts. Try again later.`
 
 **Rule worth stating** — the identical `401` for both failures is a requirement, not an
 accident: it prevents the endpoint being used to enumerate which staff accounts exist.
@@ -215,17 +222,19 @@ accident: it prevents the endpoint being used to enumerate which staff accounts 
 |---|---|
 | **Endpoint** | Applied to every endpoint except `GET /` and `POST /api/auth/login` |
 | **Realises** | FR-01, NFR-SEC-02 |
-| **Verified by** | `protected_endpoints_reject_a_missing_token`, `invalid_tokens_are_rejected`, `expired_token_is_rejected`, `token_for_a_member_that_no_longer_exists_is_rejected` |
+| **Verified by** | `protected_endpoints_reject_a_missing_token`, `invalid_tokens_are_rejected`, `expired_token_is_rejected`, `token_for_a_member_that_no_longer_exists_is_rejected`, `logout_revokes_the_token_it_was_called_with` |
 
 **Inputs** — the `Authorization: Bearer <token>` header.
 
 **Processing**
 
 1. Absent header → `401 Not authenticated. Provide a Bearer token.`
-2. Decode and verify the signature and expiry.
-3. Load the member named by `sub` **from the database**.
-4. Missing member → `401 Member no longer exists`.
-5. Attach the loaded member to the request; every later authorization decision reads that
+2. Decode and verify the signature and expiry; require the `exp` and `jti` claims.
+3. A `jti` on the revocation denylist → `401 Token has been revoked`, before any database
+   query.
+4. Load the member named by `sub` **from the database**.
+5. Missing member → `401 Member no longer exists`.
+6. Attach the loaded member to the request; every later authorization decision reads that
    row, not the token's `role` claim.
 
 **Errors**
@@ -234,12 +243,13 @@ accident: it prevents the endpoint being used to enumerate which staff accounts 
 |---|---|---|
 | No header | `401` | `Not authenticated. Provide a Bearer token.` |
 | `exp` past | `401` | `Token has expired` |
-| Bad signature or malformed | `401` | `Invalid token` |
+| Bad signature, malformed, or no `exp` / `jti` | `401` | `Invalid token` |
+| Token revoked by logout | `401` | `Token has been revoked` |
 | Member row deleted | `401` | `Member no longer exists` |
 
-**Rule** — re-loading the member makes deletion an immediate revocation. It does **not**
-provide general revocation: a valid token for an existing member cannot be stopped before
-expiry ([NFR-SEC-07](SRS.md#54-security)).
+**Rule** — re-loading the member makes deletion an immediate revocation of every token the
+member holds; [F-AUTH-04](#f-auth-04--log-out) revokes one token
+([NFR-SEC-07](SRS.md#54-security)).
 
 ### F-AUTH-03 — Health check
 
@@ -251,6 +261,35 @@ expiry ([NFR-SEC-07](SRS.md#54-security)).
 
 Returns `{"status": "ok", "service": …, "docs": "/docs"}` with no authentication. Used to
 confirm the process started and the seed ran.
+
+### F-AUTH-04 — Log out
+
+| | |
+|---|---|
+| **Endpoint** | `POST /api/auth/logout` |
+| **Roles** | Any member |
+| **Realises** | FR-01, NFR-SEC-07 |
+| **Verified by** | `logout_revokes_the_token_it_was_called_with`, `logout_leaves_the_members_other_sessions_valid`, `a_revocation_is_kept_only_as_long_as_the_token_lives` |
+
+**Preconditions** — a token that passes [F-AUTH-02](#f-auth-02--authenticate-a-request)
+steps 1–3. The member row is not loaded.
+
+**Processing**
+
+1. Put the token's `jti` on the revocation denylist until the token's own `exp`.
+2. Answer `204` with no body.
+
+**Errors** — the `401`s of F-AUTH-02, including `Token has been revoked` for a second
+logout with the same token.
+
+**Rules**
+
+- Only the token sent is revoked; the member's other tokens stay valid.
+- The denylist entry expires with the token, so the denylist holds at most the tokens
+  revoked within one token lifetime.
+- The denylist lives in the store `REDIS_URL` selects. On an unreachable Redis it fails
+  open: a revoked token is accepted again rather than every request failing
+  ([../api/AUTHENTICATION.md § 4](../api/AUTHENTICATION.md#4-logout-and-revocation)).
 
 ---
 
@@ -785,7 +824,7 @@ Load the client (`404` / `403`), then return its instances ordered by `id`, pagi
 |---|---|
 | **Endpoint** | `GET /api/instances/{id}/diagnosis` |
 | **Realises** | FR-09, BR-16, BR-17 |
-| **Verified by** | `diagnosis_falls_back_to_a_rule_based_answer`, `diagnosis_survives_a_provider_failure`, `diagnosis_works_for_a_healthy_instance_too` |
+| **Verified by** | `diagnosis_falls_back_to_a_rule_based_answer`, `diagnosis_survives_a_provider_failure`, `diagnosis_works_for_a_healthy_instance_too`, `an_unchanged_instance_reuses_the_model_answer`, `a_changed_instance_is_diagnosed_again` |
 
 **Processing**
 
@@ -793,11 +832,16 @@ Load the client (`404` / `403`), then return its instances ordered by `id`, pagi
 2. Load its **10 most recent alerts**.
 3. Release the database connection back to the pool *before* calling the provider, so a
    diagnosis in flight occupies none.
-4. If an API key is configured, call the model with the instance metadata and those
-   alerts, bounded at a 30-second timeout with at most one retry.
-5. On any provider condition — no key, timeout, transport error, exception, empty answer —
-   fall back to a deterministic rule-based write-up built from the same inputs.
-6. Return the text with `source` set to `"llm"` or `"rule-based"`.
+4. If a model answer for exactly this request — same model, prompt, instance fields and
+   alerts — was cached within `DIAGNOSIS_CACHE_TTL_SECONDS` (1800), return it with
+   `source` = `"llm"` and skip the call.
+5. Otherwise, if an API key is configured, call the model with the instance metadata and
+   those alerts, bounded at a 30-second timeout with at most one retry, and cache a
+   successful answer.
+6. On any provider condition — no key, timeout, transport error, exception, empty answer —
+   fall back to a deterministic rule-based write-up built from the same inputs. It is not
+   cached.
+7. Return the text with `source` set to `"llm"` or `"rule-based"`.
 
 **Output** `200`
 

@@ -209,8 +209,8 @@ processing rules, outputs and error paths are given in full.
 | | |
 |---|---|
 | **The system shall** | Issue a signed token in exchange for a valid email and password, and require that token on every endpoint except the health check and login |
-| **Detail** | Tokens are HS256 JWTs with a configurable lifetime (default 120 minutes) carrying `sub`, `email`, `role`, `exp`. The member row is re-read from the database on every request, so a deleted member's token stops working immediately. Login failures shall not reveal whether the email or the password was wrong |
-| **Realised by** | [F-AUTH-01](FRS.md#f-auth-01--log-in), [F-AUTH-02](FRS.md#f-auth-02--authenticate-a-request), [F-AUTH-03](FRS.md#f-auth-03--health-check) |
+| **Detail** | Tokens are HS256 JWTs with a configurable lifetime (default 120 minutes) carrying `sub`, `email`, `role`, `iat`, `exp` and a unique `jti`. The member row is re-read from the database on every request, so a deleted member's token stops working immediately, and a member can revoke the token they hold by logging out. Login failures shall not reveal whether the email or the password was wrong, and repeated failures shall be rate-limited per account and per client address |
+| **Realised by** | [F-AUTH-01](FRS.md#f-auth-01--log-in), [F-AUTH-02](FRS.md#f-auth-02--authenticate-a-request), [F-AUTH-03](FRS.md#f-auth-03--health-check), [F-AUTH-04](FRS.md#f-auth-04--log-out) |
 | **Traces to** | BR-06 |
 
 ### FR-02 — Client company management
@@ -335,12 +335,13 @@ review.
 | **NFR-SEC-04** | The system shall not be vulnerable to SQL injection; all queries shall be built through the ORM with bound parameters, and any user-supplied identifier used for ordering shall be whitelisted | M · D | Met and reviewed — [SECURITY_BUGS](../security/SECURITY_BUGS.md) |
 | **NFR-SEC-05** | No stack trace or internal detail shall reach a client | M · D | Met |
 | **NFR-SEC-06** | The signing key shall be deployment-specific, and no credential shall be discoverable through the API | M | **Not met** — [SEC-01, SEC-02](../security/SECURITY_BUGS.md) |
-| **NFR-SEC-07** | An issued token shall be revocable before expiry | S | **Not met** — [SEC-04](../security/SECURITY_BUGS.md), blocked on SEC-08 |
+| **NFR-SEC-07** | An issued token shall be revocable before expiry | S · V | Met — `POST /api/auth/logout` revokes one token ([SEC-04](../security/SECURITY_BUGS.md#sec-04)). Revoking every session of one member at once is not provided |
 | **NFR-SEC-08** | Transport shall be HTTPS outside localhost | M | Deployment responsibility — [DEPLOYMENT](../operations/DEPLOYMENT.md) |
+| **NFR-SEC-09** | Repeated failed logins shall be limited per target account and per client address, refused before the password is checked, and logged | S · V | Met — [AUTHENTICATION § 2](../api/AUTHENTICATION.md#2-login-rate-limit), [SEC-05](../security/SECURITY_BUGS.md#sec-05) |
 
-NFR-SEC-06 and NFR-SEC-07 are recorded as **not met** deliberately. The security review
-reproduced 15 findings and fixed none of them; the register is the plan of record, and
-this specification does not claim what the code does not do.
+NFR-SEC-06 is recorded as **not met** deliberately. The security review reproduced 15
+findings; SEC-04 and SEC-05 are fixed and SEC-08 partly, the rest are open. The register is
+the plan of record, and this specification does not claim what the code does not do.
 
 ### 5.5 Reliability and availability
 
@@ -444,7 +445,7 @@ performance and security NFRs.
 
 | FR | Business requirement | Functions | Test suites |
 |---|---|---|---|
-| FR-01 | BR-06 | F-AUTH-01…03 | `test_auth.py` |
+| FR-01 | BR-06 | F-AUTH-01…04 | `test_auth.py` |
 | FR-02 | BR-02, BR-05 | F-CLNT-01…03 | `test_clients.py` |
 | FR-03 | BR-01, BR-03, BR-04 | F-INST-01…03 | `test_instances.py` |
 | FR-04 | BR-14, BR-15 | F-INST-04, F-INST-05 | `test_instances.py`, `test_member_c.py` |
@@ -470,7 +471,7 @@ Requirement-to-test-case traceability is in
 | 4 | No migrations | A column change means recreating the database file | [ARCHITECTURE § 5](../design/ARCHITECTURE.md#5-startup) |
 | 5 | `cost_snapshots` is written but never read | No month-over-month reporting | [COST § 6](../business-rules/COST.md#6-cost_snapshots) |
 | 6 | `403` rather than `404` across scope | Confirms a resource exists to a caller who may not read it | [AUTHORIZATION § 3](../business-rules/AUTHORIZATION.md#3-403-rather-than-404) |
-| 7 | 15 open security findings, two critical | The system is not ready for exposure outside a trusted network | [SECURITY_BUGS](../security/SECURITY_BUGS.md) |
+| 7 | 12 open security findings and one partly fixed, two of them critical | The system is not ready for exposure outside a trusted network | [SECURITY_BUGS](../security/SECURITY_BUGS.md) |
 | 8 | Concurrency is untested | The dedup check is read-then-write and is not exercised under parallel calls | [FUNCTIONAL_TESTS § 7](../testing/FUNCTIONAL_TESTS.md#7-what-is-deliberately-not-covered) |
 
 ---

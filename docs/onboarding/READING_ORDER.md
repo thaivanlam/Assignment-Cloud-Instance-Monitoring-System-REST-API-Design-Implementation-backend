@@ -12,8 +12,9 @@ models before the services, the services before the controllers that delegate to
   to change code safely inside one vertical slice.
 - **Prerequisites:** Python, and enough FastAPI to recognise `Depends`. SQLAlchemy 2.0 and
   Pydantic v2 details are explained where they first appear.
-- **Scope:** 83 numbered stops across the 18 source files under `app/`, plus the seed and
-  the test fixtures.
+- **Scope:** 94 numbered stops across the 21 source files under `app/`, plus the seed and
+  the test fixtures. Stops added after the original numbering carry a letter (`27a`,
+  `32b`) so every number cited elsewhere keeps its meaning.
 
 ---
 
@@ -24,13 +25,13 @@ models before the services, the services before the controllers that delegate to
 | [0](#stage-0--run-it-before-you-read-it) | What the API does from outside | — | — |
 | [1](#stage-1--the-entry-point) | How the app is assembled | `main.py` | 7 |
 | [2](#stage-2--foundations-config-session-tables-dtos) | Settings, session, pagination, tables, DTOs | `config.py`, `database.py`, `pagination.py`, `models/`, `schemas/` | 12 |
-| [3](#stage-3--authentication-and-role-scoping) | Who the caller is, and what they may see | `core/`, `auth_controller.py` | 13 |
+| [3](#stage-3--authentication-and-role-scoping) | Who the caller is, what they may see, how often they may fail, and how they sign out | `core/`, `auth_controller.py` | 20 |
 | [4](#stage-4--the-reference-vertical-slice-instances) | The pattern every feature follows | `instance_service.py`, `instance_controller.py` | 12 |
 | [5](#stage-5--monitoring-where-the-business-rules-live) | Thresholds, auto-alerts, deduplication, the batched scan | `monitor_service.py`, `monitor_controller.py` | 12 |
 | [6](#stage-6--alerts) | Alert history and resolution | `alert_service.py`, `alert_controller.py` | 4 |
 | [7](#stage-7--clients-cost-and-sla) | Money and uptime arithmetic | `client_service.py`, `client_controller.py` | 15 |
-| [8](#stage-8--the-llm-diagnosis-feature) | The one external call, and its fallback | `llm_service.py` | 5 |
-| [9](#stage-9--seed-data-and-tests) | Where the demo numbers come from | `seed.py`, `tests/` | 3 |
+| [8](#stage-8--the-llm-diagnosis-feature) | The one external call, its cache, and its fallback | `llm_service.py` | 6 |
+| [9](#stage-9--seed-data-and-tests) | Where the demo numbers come from | `seed.py`, `tests/` | 6 |
 
 ---
 
@@ -51,7 +52,7 @@ Then log in as `lam@techvalley.vn` / `manager123!` and call it again. The number
 because that member manages only clients 1–5. Explaining that difference is Stage 3.
 
 Companion documents: [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) walks 29 requests in
-order; [../api/OVERVIEW.md](../api/OVERVIEW.md) lists all 19 endpoints.
+order; [../api/OVERVIEW.md](../api/OVERVIEW.md) lists all 20 endpoints.
 
 ---
 
@@ -91,7 +92,9 @@ Four files, in this order. Each is used by everything after it.
 
 - `Settings` — a pydantic-settings `BaseSettings`, so every field can be overridden by an
   environment variable or `.env` entry without touching code. Note `CPU_WARNING_THRESHOLD`
-  (80.0) and `LONG_STOPPED_HOURS` (48); Stage 5 is the code that reads them.
+  (80.0) and `LONG_STOPPED_HOURS` (48); Stage 5 is the code that reads them. The
+  `REDIS_URL`, `LOGIN_*` and `DIAGNOSIS_CACHE_TTL_SECONDS` fields are read in Stages 3
+  and 8.
 - `UNIT_PRICES` — `SMALL 50` / `MEDIUM 120` / `LARGE 250`. Read by Stages 4 and 7.
 - `SLA_THRESHOLDS` — `PREMIUM 99.9` / `STANDARD 99` / `BASIC 95`. Read by Stage 7.
 
@@ -190,10 +193,24 @@ FastAPI, readable in isolation.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 24 | `hash_password` | [security.py:13](../../app/core/security.py#L13) | PBKDF2-SHA256, 260,000 iterations, random 16-byte salt, stored as `pbkdf2_sha256$iterations$salt$digest`. Self-describing, so the parameters can change without a migration. |
-| 25 | `verify_password` | [security.py:19](../../app/core/security.py#L19) | Splits that string apart again and compares with `hmac.compare_digest`. A malformed stored value returns `False` rather than raising. |
-| 26 | `create_access_token` | [security.py:30](../../app/core/security.py#L30) | Claims: `sub` (member id as a string), `email`, `role`, `exp`. |
-| 27 | `decode_access_token` | [security.py:41](../../app/core/security.py#L41) | Verifies signature and expiry; raises PyJWT errors for the caller to translate. |
+| 24 | `hash_password` | [security.py:14](../../app/core/security.py#L14) | PBKDF2-SHA256, 260,000 iterations, random 16-byte salt, stored as `pbkdf2_sha256$iterations$salt$digest`. Self-describing, so the parameters can change without a migration. |
+| 25 | `verify_password` | [security.py:20](../../app/core/security.py#L20) | Splits that string apart again and compares with `hmac.compare_digest`. A malformed stored value returns `False` rather than raising. |
+| 26 | `create_access_token` | [security.py:31](../../app/core/security.py#L31) | Claims: `sub` (member id as a string), `email`, `role`, `iat`, `exp`, and `jti` — a random id that makes this one token revocable. |
+| 27 | `decode_access_token` | [security.py:46](../../app/core/security.py#L46) | Verifies signature and expiry and **requires** `exp` and `jti`; raises PyJWT errors for the caller to translate. |
+
+### 3.2b `app/core/store.py`, `rate_limit.py`, `revocation.py` — state that expires
+
+[app/core/store.py](../../app/core/store.py) is the only place outside the database that
+remembers anything between requests. Read it first; the two modules after it are a few
+lines each on top of it.
+
+| # | Function | Line | What to take away |
+|---:|---|---|---|
+| 27a | `MemoryStore`, `RedisStore` | [store.py:37](../../app/core/store.py#L37) | One contract — `get`, `set`, `exists`, `delete`, and `add`, which returns `(count, seconds left)` — in two backends. Every value has a TTL. `RedisStore` catches every `RedisError` and answers "nothing stored": **fail open**. `MemoryStore` takes a clock so tests can move time. |
+| 27b | `get_store` | [store.py:160](../../app/core/store.py#L160) | Picks the backend once per process from `REDIS_URL` — the same double-checked-lock shape as stop 76. Empty means memory, which is only correct for one worker. |
+| 27c | `reserve_login_attempt` | [rate_limit.py:27](../../app/core/rate_limit.py#L27) | Adds one to the account counter and the address counter *before* the password is checked, and raises `429` with `Retry-After` if either is over its limit. Counting first is what makes the limit hold under concurrent guesses. |
+| 27d | `release_login_attempt` | [rate_limit.py:52](../../app/core/rate_limit.py#L52) | On success: clear the account counter, give the address back its one attempt. |
+| 27e | `revoke_token`, `is_token_revoked` | [revocation.py:18](../../app/core/revocation.py#L18) | A denylist of `jti`s whose TTL is the token's remaining lifetime — so it never outgrows one token lifetime of logouts. |
 
 ### 3.3 `app/controllers/auth_controller.py` — the first complete request
 
@@ -201,23 +218,25 @@ FastAPI, readable in isolation.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 28 | `login` | [auth_controller.py:13](../../app/controllers/auth_controller.py#L13) | Look up by email → `verify_password` → `create_access_token`. Note the deliberately vague `"Invalid email or password"`: the same message whether the email is unknown or the password is wrong. |
+| 28 | `login` | [auth_controller.py:25](../../app/controllers/auth_controller.py#L25) | `reserve_login_attempt` → look up by email → `verify_password` → `release_login_attempt` → `create_access_token`. Note the deliberately vague `"Invalid email or password"`: the same message whether the email is unknown or the password is wrong — and the `WARNING` log line on every failure. |
+| 28b | `logout` | [auth_controller.py:46](../../app/controllers/auth_controller.py#L46) | Depends on `get_token_claims` (stop 29), not on the member, and calls `revoke_token`. Returns `204`. |
 
 This is the smallest complete endpoint in the project — request DTO in, response DTO out.
 Everything after it is the same shape with more layers.
 
 ### 3.4 `app/core/deps.py` — the heart of the authorization model
 
-[app/core/deps.py](../../app/core/deps.py). Read all four stops in file order; they build
+[app/core/deps.py](../../app/core/deps.py). Read the stops in file order; they build
 on each other.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 29 | `get_current_member` | [deps.py:14](../../app/core/deps.py#L14) | Bearer token → decode → load the `Member` row. Three distinct 401s: no credentials, expired, invalid. It re-reads the member on every request, so a deleted member's token stops working immediately. |
-| 30 | `require_admin` | [deps.py:37](../../app/core/deps.py#L37) | Depends on the previous one and adds a role check. Used by exactly one endpoint: `POST /api/clients`. |
-| 31 | `assert_client_access` | [deps.py:43](../../app/core/deps.py#L43) | **The single-object guard.** ADMIN passes; a `CLIENT_MANAGER` passes only if `client.managerId == member.id`. It runs *after* the entity is loaded — so a manager asking for someone else's instance gets `403`, not `404`. |
-| 32 | `accessible_client_ids` | [deps.py:54](../../app/core/deps.py#L54) | **The list guard.** Returns `None` for ADMIN, meaning *no filter*; otherwise a `SELECT` of the manager's client ids. It takes no `Session` — it builds the lookup and the caller's query runs it. |
-| 32b | `assert_client_id_access` | [deps.py:77](../../app/core/deps.py#L77) | **Stop 31 for callers holding only an id** — same rule, same `403`, asked as one `EXISTS` over the scope stop 32 builds instead of loading the client to compare one field. It is last in the file because it is built from 32; read it as a footnote to 31. |
+| 29 | `get_token_claims` | [deps.py:15](../../app/core/deps.py#L15) | Bearer token → decode → reject a revoked `jti`. Four distinct 401s: no credentials, expired, invalid, revoked. The revocation check runs before any database query. |
+| 29b | `get_current_member` | [deps.py:45](../../app/core/deps.py#L45) | Takes the claims from 29 and loads the `Member` row. It re-reads the member on every request, so a deleted member's token stops working immediately. FastAPI caches 29 within a request, so an endpoint depending on both decodes once. |
+| 30 | `require_admin` | [deps.py:55](../../app/core/deps.py#L55) | Depends on the previous one and adds a role check. Used by exactly one endpoint: `POST /api/clients`. |
+| 31 | `assert_client_access` | [deps.py:61](../../app/core/deps.py#L61) | **The single-object guard.** ADMIN passes; a `CLIENT_MANAGER` passes only if `client.managerId == member.id`. It runs *after* the entity is loaded — so a manager asking for someone else's instance gets `403`, not `404`. |
+| 32 | `accessible_client_ids` | [deps.py:72](../../app/core/deps.py#L72) | **The list guard.** Returns `None` for ADMIN, meaning *no filter*; otherwise a `SELECT` of the manager's client ids. It takes no `Session` — it builds the lookup and the caller's query runs it. |
+| 32b | `assert_client_id_access` | [deps.py:95](../../app/core/deps.py#L95) | **Stop 31 for callers holding only an id** — same rule, same `403`, asked as one `EXISTS` over the scope stop 32 builds instead of loading the client to compare one field. It is last in the file because it is built from 32; read it as a footnote to 31. |
 
 **The `None` convention.** Every service that lists rows takes
 `client_ids: Select[tuple[int]] | None`. `None` means "apply no filter" (ADMIN); a
@@ -276,7 +295,7 @@ Six endpoints; four of them reduce to the same three steps — load, guard, dele
 | 43 | `delete_instance` | [instance_controller.py:94](../../app/controllers/instance_controller.py#L94) | same; returns `204` |
 | 44 | `diagnose_instance` | [instance_controller.py:109](../../app/controllers/instance_controller.py#L109) | same; loads the 10 most recent alerts, then calls `db.close()` — the connection goes back to the pool before the provider call, not after it — and then Stage 8 |
 
-**The shape you have now learned** — and it holds for all 19 endpoints:
+**The shape you have now learned** — and it holds for all 20 endpoints:
 
 ```mermaid
 sequenceDiagram
@@ -396,15 +415,16 @@ endpoints; the first uses `require_admin`, the rest `get_client` + `assert_clien
 [app/services/llm_service.py](../../app/services/llm_service.py) — the only outbound
 network call in the system, and the only function that must never fail.
 
-Read it **bottom-up**: `diagnose` is three lines and tells you what the other four are for.
+Read it **bottom-up**: `diagnose` is a dozen lines and tells you what the others are for.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 76 | `_get_client` | [llm_service.py:34](../../app/services/llm_service.py#L34) | The single Anthropic client the process uses: built on the first diagnosis behind a double-checked lock, reused by every one after it. A client per request meant a connection pool per request ([../performance/PERFORMANCE_BUGS.md § PERF-14](../performance/PERFORMANCE_BUGS.md#perf-14)). `import anthropic` sits *inside* it, so the dependency stays optional; the SDK never reads `.env`, so the key is handed over explicitly; and both branches carry `TIMEOUT_SECONDS` / `MAX_RETRIES` — without them the SDK waits up to 30 minutes. |
-| 77 | `_build_context` | [llm_service.py:61](../../app/services/llm_service.py#L61) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
-| 78 | `_llm_diagnosis` | [llm_service.py:81](../../app/services/llm_service.py#L81) | The Anthropic SDK call itself, now three lines shorter: it asks `_get_client` for the client and sends the request. One comment worth reading — adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`, a timeout included, and so does the one `_get_client` raises on a machine with no credential. |
-| 79 | `_rule_based_diagnosis` | [llm_service.py:117](../../app/services/llm_service.py#L117) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
-| 80 | `diagnose` | [llm_service.py:147](../../app/services/llm_service.py#L147) | Try the LLM, fall back, return `(text, source)` — `source` is surfaced in the response so a caller can always tell which path ran. |
+| 76 | `_get_client` | [llm_service.py:46](../../app/services/llm_service.py#L46) | The single Anthropic client the process uses: built on the first diagnosis behind a double-checked lock, reused by every one after it. A client per request meant a connection pool per request ([../performance/PERFORMANCE_BUGS.md § PERF-14](../performance/PERFORMANCE_BUGS.md#perf-14)). `import anthropic` sits *inside* it, so the dependency stays optional; the SDK never reads `.env`, so the key is handed over explicitly; and both branches carry `TIMEOUT_SECONDS` / `MAX_RETRIES` — without them the SDK waits up to 30 minutes. |
+| 77 | `_build_context` | [llm_service.py:76](../../app/services/llm_service.py#L76) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
+| 77b | `_user_message`, `_cache_key` | [llm_service.py:96](../../app/services/llm_service.py#L96) | The exact user turn, and a SHA-256 over model + `SYSTEM_PROMPT` + that turn. Anything the model would see differently is a different key, so nothing ever invalidates an entry — an outdated one is never asked for again. |
+| 78 | `_llm_diagnosis` | [llm_service.py:114](../../app/services/llm_service.py#L114) | The Anthropic SDK call itself, now three lines shorter: it asks `_get_client` for the client and sends the request. One comment worth reading — adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`, a timeout included, and so does the one `_get_client` raises on a machine with no credential. |
+| 79 | `_rule_based_diagnosis` | [llm_service.py:134](../../app/services/llm_service.py#L134) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
+| 80 | `diagnose` | [llm_service.py:164](../../app/services/llm_service.py#L164) | Cached model answer if there is one; otherwise try the LLM and cache what it returns; otherwise fall back — the fallback is never cached. Returns `(text, source)`; `source` is surfaced in the response so a caller can always tell which path ran. |
 
 **The design point:** this endpoint has no failure mode. No API key, no network, a bad
 response — all produce a useful answer with `source: "rule-based"`, which is why the demo
@@ -435,26 +455,29 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 
 ### 9.2 `tests/`
 
-[tests/conftest.py](../../tests/conftest.py) first — four fixtures, and they explain how
-129 tests run in seconds:
+[tests/conftest.py](../../tests/conftest.py) first — seven fixtures, and they explain how
+149 tests stay isolated and fast:
 
 | # | Fixture | Line | What to take away |
 |---:|---|---|---|
-| 81 | `memoised_seed_hashing` | [conftest.py:18](../../tests/conftest.py#L18) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
-| 82 | `api` | [conftest.py:35](../../tests/conftest.py#L35) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
-| 83 | `auth_headers` | [conftest.py:74](../../tests/conftest.py#L74) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
-| 84 | `empty_scope_headers` | [conftest.py:93](../../tests/conftest.py#L93) | A fourth account the seed does not create: a `CLIENT_MANAGER` with no clients. It exists because an empty scope is the case both guards of stop 31–32 are easiest to get wrong — it has to keep meaning *nothing*. |
+| 81 | `memoised_seed_hashing` | [conftest.py:22](../../tests/conftest.py#L22) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
+| 81a | `clock` | [conftest.py:52](../../tests/conftest.py#L52) | A `FakeClock` the test advances by hand, so rate-limit windows, token lifetimes and cache TTLs pass without sleeping. |
+| 81b | `store` | [conftest.py:57](../../tests/conftest.py#L57) | Autouse: a fresh `MemoryStore` on that clock for every test (stop 27a), so no test inherits another's failed logins, revocations or cached diagnoses — and a developer's `REDIS_URL` never reaches the suite. |
+| 81c | `redis_server` | [conftest.py:71](../../tests/conftest.py#L71) | Swaps in `RedisStore` over `fakeredis`. `server.connected = False` simulates an outage. |
+| 82 | `api` | [conftest.py:86](../../tests/conftest.py#L86) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
+| 83 | `auth_headers` | [conftest.py:125](../../tests/conftest.py#L125) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
+| 84 | `empty_scope_headers` | [conftest.py:144](../../tests/conftest.py#L144) | A fourth account the seed does not create: a `CLIENT_MANAGER` with no clients. It exists because an empty scope is the case both guards of stop 31–32 are easiest to get wrong — it has to keep meaning *nothing*. |
 
 Then read the suites in the same order as this document:
 
 | File | Covers | Stages |
 |---|---|---|
-| [tests/test_auth.py](../../tests/test_auth.py) | login, token, 401 paths | 3 |
+| [tests/test_auth.py](../../tests/test_auth.py) | login, rate limit, logout, token, 401 paths, both store backends | 3 |
 | [tests/test_instances.py](../../tests/test_instances.py) | CRUD, pagination, sort, `409` | 4 |
 | [tests/test_member_c.py](../../tests/test_member_c.py) | status changes and monitoring scope | 4, 5 |
 | [tests/test_alerts.py](../../tests/test_alerts.py) | filters, resolve, deduplication | 5, 6 |
 | [tests/test_clients.py](../../tests/test_clients.py) | scoping, cost, forecast, SLA | 7 |
-| [tests/test_diagnosis.py](../../tests/test_diagnosis.py) | fallback path, `source` field | 8 |
+| [tests/test_diagnosis.py](../../tests/test_diagnosis.py) | fallback path, `source` field, answer cache | 8 |
 
 The tests are the executable version of the business rules: when a document and the code
 disagree, [tests/](../../tests/) is the tie-breaker. What each suite asserts:
@@ -477,6 +500,7 @@ Answer these from memory before moving on. If one is hard, the stage to re-read 
 | 7 | Why is `GET /api/clients/1/cost` different from `/cost-forecast`? | 7 |
 | 8 | What makes the diagnosis endpoint work with no API key? | 8 |
 | 9 | Where do the four seeded CPU warnings come from? | 9 |
+| 10 | Why is a login attempt counted *before* the password is checked, and what does a logout store? | 3 |
 
 ---
 
@@ -494,6 +518,8 @@ reading the linked document first.
 | SLA uptime called "approximate" | No status-history table exists to be exact against | [../business-rules/SLA.md](../business-rules/SLA.md) |
 | `in_(client_ids)` over a `SELECT`, not a list | The scope rides inside the query instead of costing one of its own | [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md), [../performance/PERFORMANCE_BUGS.md § PERF-10](../performance/PERFORMANCE_BUGS.md#perf-10) |
 | Cost stored on the row, not computed | Priced once at creation, from `UNIT_PRICES` | [../business-rules/COST.md](../business-rules/COST.md) |
+| `RedisStore` swallows every Redis error | Fail open: a Redis outage turns off the rate limit, revocation and cache instead of failing requests | [../api/AUTHENTICATION.md § 4](../api/AUTHENTICATION.md#4-logout-and-revocation) |
+| The right password answered `429` | The account limit holds regardless of the password — otherwise it would confirm a correct guess | [../api/AUTHENTICATION.md § 2](../api/AUTHENTICATION.md#2-login-rate-limit) |
 
 ---
 

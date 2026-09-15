@@ -1,7 +1,8 @@
 """Functional tests for GET /api/instances/{id}/diagnosis.
 
 The Anthropic call is replaced in every test — the suite must never reach the network,
-and the endpoint's contract is that it answers either way.
+and the endpoint's contract is that it answers either way. The diagnosis cache is covered
+at the end of the file.
 Rules under test: docs/design/LLM_FEATURE.md.
 """
 
@@ -10,6 +11,7 @@ import types
 import anthropic
 import pytest
 
+from app.config import settings
 from app.services import llm_service
 
 REAL_LLM_DIAGNOSIS = llm_service._llm_diagnosis
@@ -182,3 +184,121 @@ def test_diagnosis_enforces_scope_and_existence(api, auth_headers):
     assert forbidden.status_code == 403
     assert missing.status_code == 404
     assert missing.json()["error"] == "NotFound"
+
+
+# ---------- the diagnosis cache ----------
+
+
+@pytest.fixture
+def model_calls(offline):
+    """A stand-in model that answers every call differently and records each one."""
+    calls = []
+
+    def answer(instance, alerts):
+        calls.append(instance.id)
+        return f"Model answer #{len(calls)} for instance {instance.id}."
+
+    offline.setattr(llm_service, "_llm_diagnosis", answer)
+    return calls
+
+
+def _diagnose(client, headers, instance_id=5):
+    response = client.get(f"/api/instances/{instance_id}/diagnosis", headers=headers)
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_an_unchanged_instance_reuses_the_model_answer(api, auth_headers, model_calls):
+    client, _ = api
+
+    first = _diagnose(client, auth_headers["manager1"])
+    second = _diagnose(client, auth_headers["admin"])
+
+    assert model_calls == [5]
+    assert second["diagnosis"] == first["diagnosis"] == "Model answer #1 for instance 5."
+    assert second["source"] == "llm"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(
+            lambda client, headers: client.get("/api/monitor/errors", headers=headers),
+            id="a-new-alert",
+        ),
+        pytest.param(
+            lambda client, headers: client.patch(
+                "/api/instances/5/status",
+                json={"status": "RUNNING", "cpuUsage": 12.0},
+                headers=headers,
+            ),
+            id="a-status-change",
+        ),
+    ],
+)
+def test_a_changed_instance_is_diagnosed_again(api, auth_headers, model_calls, change):
+    client, _ = api
+    headers = auth_headers["admin"]
+
+    first = _diagnose(client, headers)
+    assert change(client, headers).status_code == 200
+    second = _diagnose(client, headers)
+
+    assert model_calls == [5, 5]
+    assert second["diagnosis"] != first["diagnosis"]
+
+
+def test_a_cached_answer_expires(api, auth_headers, model_calls, clock):
+    client, _ = api
+
+    _diagnose(client, auth_headers["admin"])
+    clock.advance(settings.DIAGNOSIS_CACHE_TTL_SECONDS)
+    _diagnose(client, auth_headers["admin"])
+
+    assert model_calls == [5, 5]
+
+
+def test_the_rule_based_fallback_is_never_cached(api, auth_headers, offline):
+    """A machine that gains a key must start answering from the model at once."""
+    client, _ = api
+    offline.setattr(llm_service, "_llm_diagnosis", lambda instance, alerts: None)
+    assert _diagnose(client, auth_headers["admin"])["source"] == "rule-based"
+
+    offline.setattr(llm_service, "_llm_diagnosis", lambda instance, alerts: "Now from the model.")
+
+    assert _diagnose(client, auth_headers["admin"])["source"] == "llm"
+
+
+def test_a_zero_ttl_disables_the_cache(api, auth_headers, model_calls, monkeypatch, store):
+    client, _ = api
+    monkeypatch.setattr(settings, "DIAGNOSIS_CACHE_TTL_SECONDS", 0)
+
+    _diagnose(client, auth_headers["admin"])
+    _diagnose(client, auth_headers["admin"])
+
+    assert model_calls == [5, 5]
+    assert not any(key.startswith("diagnosis:") for key in store._data)
+
+
+def test_the_cache_works_through_redis(api, auth_headers, model_calls, redis_server):
+    client, _ = api
+
+    _diagnose(client, auth_headers["admin"])
+    cached = _diagnose(client, auth_headers["admin"])
+
+    assert model_calls == [5]
+    assert cached["diagnosis"] == "Model answer #1 for instance 5."
+    [key] = redis_server.client.keys(f"{settings.REDIS_KEY_PREFIX}diagnosis:5:*")
+    assert 0 < redis_server.client.ttl(key) <= settings.DIAGNOSIS_CACHE_TTL_SECONDS
+
+
+def test_diagnosis_still_answers_when_redis_is_down(api, auth_headers, model_calls, redis_server):
+    client, _ = api
+    redis_server.server.connected = False
+
+    first = _diagnose(client, auth_headers["admin"])
+    second = _diagnose(client, auth_headers["admin"])
+
+    # No cache to read or write, so every call goes to the model — but every call answers.
+    assert model_calls == [5, 5]
+    assert [first["source"], second["source"]] == ["llm", "llm"]

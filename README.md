@@ -5,7 +5,7 @@
 **A REST API that replaces the Excel spreadsheet 10 client companies were tracked in.**
 
 Instances, alerts, cost, SLA and an LLM-powered diagnosis endpoint — behind JWT auth,
-role scoping and 129 functional tests.
+role scoping and 149 functional tests.
 
 <br/>
 
@@ -17,8 +17,8 @@ role scoping and 129 functional tests.
 [![JWT](https://img.shields.io/badge/Auth-JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)](docs/api/AUTHENTICATION.md)
 [![SQLite](https://img.shields.io/badge/DB-SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](docs/design/ERD.md)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?style=flat-square&logo=anthropic&logoColor=white)](docs/design/LLM_FEATURE.md)
-[![Tests](https://img.shields.io/badge/tests-129%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
-[![Endpoints](https://img.shields.io/badge/endpoints-19%20%2B%20health-44CC11?style=flat-square&logo=swagger&logoColor=white)](docs/api/ENDPOINTS.md)
+[![Tests](https://img.shields.io/badge/tests-149%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
+[![Endpoints](https://img.shields.io/badge/endpoints-20%20%2B%20health-44CC11?style=flat-square&logo=swagger&logoColor=white)](docs/api/ENDPOINTS.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 <br/>
@@ -38,7 +38,7 @@ role scoping and 129 functional tests.
 
 |  | Feature | What it does |
 |:--:|---|---|
-| 🔐 | **JWT auth + role scoping** | `ADMIN` sees everything; `CLIENT_MANAGER` only their assigned clients — enforced in one dependency, not per endpoint |
+| 🔐 | **JWT auth + role scoping** | `ADMIN` sees everything; `CLIENT_MANAGER` only their assigned clients — enforced in one dependency, not per endpoint. Logout revokes a token; failed logins are rate-limited |
 | 🖥️ | **Instance lifecycle** | Create, list, filter, sort, change status; a `RUNNING` instance cannot be deleted (`409`) |
 | 📄 | **Paginated everywhere** | All seven list endpoints share one `page`/`size` pair and one `PageResponse` envelope, so no response grows with the table |
 | 🚨 | **Automatic alerting** | Monitoring scans raise `CPU_HIGH`, `ERROR_DETECTED` and `LONG_STOPPED` alerts, and skip duplicates while one is unresolved |
@@ -46,7 +46,7 @@ role scoping and 129 functional tests.
 | 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
 | 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
 | 📚 | **Documented end to end** | Fifteen documentation folders: requirements (BRD/SRS/FRS/use cases), API reference, business rules, ERD, user manual, walkthrough, test cases, performance and security findings |
-| ✅ | **129 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
+| ✅ | **149 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
 
@@ -116,7 +116,7 @@ flowchart LR
         SVC["services/<br/>business logic"]
         MOD["models/<br/>SQLAlchemy 2.0 ORM"]
         SCH["schemas/<br/>Pydantic v2 DTOs"]
-        CORE["core/<br/>JWT · deps · exceptions"]
+        CORE["core/<br/>JWT · deps · rate limit · revocation"]
 
         CTRL --> SVC --> MOD
         SCH -.->|"validate · serialise"| CTRL
@@ -125,6 +125,7 @@ flowchart LR
 
     MOD --> DB[("SQLite<br/>monitoring.db")]
     SVC -->|"diagnosis"| LLM["Anthropic Claude<br/>rule-based fallback"]
+    CORE -.->|"counters · denylist · cache"| KV[("Memory or Redis<br/>REDIS_URL")]
 ```
 
 | Layer | Directory | Responsibility |
@@ -133,7 +134,7 @@ flowchart LR
 | **V** | [app/schemas/](app/schemas/) | Pydantic v2 request/response DTOs |
 | **C** | [app/controllers/](app/controllers/) | Routers — parse, delegate, return |
 | — | [app/services/](app/services/) | Monitoring, alerts, cost, SLA, LLM |
-| — | [app/core/](app/core/) | JWT security, auth dependencies, domain exceptions |
+| — | [app/core/](app/core/) | JWT security, auth dependencies, domain exceptions, login rate limit, token revocation |
 
 Full write-up: [docs/design/ARCHITECTURE.md](docs/design/ARCHITECTURE.md) ·
 data model: [docs/design/ERD.md](docs/design/ERD.md).
@@ -159,12 +160,12 @@ Columns, constraints and derived fields: [docs/design/ERD.md](docs/design/ERD.md
 
 ## 🔌 API at a glance
 
-Nineteen endpoints across five routers, plus a `GET /` health check. Full detail in
+Twenty endpoints across five routers, plus a `GET /` health check. Full detail in
 **[docs/api/ENDPOINTS.md](docs/api/ENDPOINTS.md)**.
 
 | Group | Endpoints |
 |---|---|
-| 🔑 **Auth** | `POST /api/auth/login` |
+| 🔑 **Auth** | `POST /api/auth/login` · `POST /api/auth/logout` |
 | 🖥️ **Instances** | `POST` · `GET` `/api/instances` · `GET /{id}` · `PATCH /{id}/status` · `DELETE /{id}` · `GET /{id}/diagnosis` |
 | 📡 **Monitoring** | `GET /api/monitor/warnings` · `/errors` · `/long-stopped` · `/report` |
 | 🚨 **Alerts** | `GET /api/alerts` · `PATCH /api/alerts/{id}/resolve` |
@@ -179,6 +180,8 @@ answers in the same envelope; every error answers as `{"error": ..., "detail": .
 Each rule is documented in **[docs/business-rules/](docs/business-rules/README.md)**:
 
 - 🔐 **Role scoping** — ADMIN sees everything; CLIENT_MANAGER only their assigned clients.
+- 🚪 **Sessions** — logout revokes the token in use; 10 failed logins per account (50 per
+  address) in 15 minutes answer `429`. Shared across workers with Redis.
 - 🚨 **Automatic alerts** — monitoring scans record alerts and skip duplicates while an
   unresolved alert of the same type exists.
 - ⛔ **RUNNING instances cannot be deleted** — `409 ActiveInstanceException`.
@@ -187,13 +190,13 @@ Each rule is documented in **[docs/business-rules/](docs/business-rules/README.m
 - 📈 **SLA** — PREMIUM 99.9% / STANDARD 99% / BASIC 95%, with a documented uptime
   approximation.
 - 🤖 **LLM diagnosis** — falls back to a rule-based answer with no API key, so the demo
-  never breaks.
+  never breaks; a model answer is reused for 30 minutes while the instance is unchanged.
 
 ---
 
 ## 📸 Screenshots
 
-Captured from Swagger UI against a freshly seeded database — all 29 in
+Captured from Swagger UI against a freshly seeded database — all 31 in
 [docs/screenshots/](docs/screenshots/README.md).
 
 | Login → token | Instances, sorted and paginated |
@@ -208,7 +211,7 @@ Captured from Swagger UI against a freshly seeded database — all 29 in
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q          # 129 functional tests — no API key, no running server
+pytest -q          # 149 functional tests — no API key, no Redis, no running server
 ```
 
 The suite drives the API over HTTP against a per-test **in-memory** database seeded with
@@ -224,7 +227,7 @@ critical, nine fixed so far:
 [docs/performance/PERFORMANCE_BUGS.md](docs/performance/PERFORMANCE_BUGS.md).
 
 🔐 Injection, information disclosure and session integrity were reviewed the same way —
-15 reproduced findings, two rated critical, none fixed yet:
+15 reproduced findings, two rated critical; SEC-04 and SEC-05 fixed, SEC-08 partly:
 [docs/security/SECURITY_BUGS.md](docs/security/SECURITY_BUGS.md).
 
 ---

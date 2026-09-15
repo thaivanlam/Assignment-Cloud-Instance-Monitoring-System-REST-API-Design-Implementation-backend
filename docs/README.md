@@ -111,8 +111,8 @@ own README linking to the files inside it.
 **[operations/](operations/README.md)**
 
 - [DEPLOYMENT.md](operations/DEPLOYMENT.md) — launching locally, on a server and on Vercel; verification, upgrade, rollback, backup
-- [CONFIGURATION.md](operations/CONFIGURATION.md) — every setting, generating the keys, and what a rotation breaks
-- [RUNBOOKS.md](operations/RUNBOOKS.md) — 15 incident runbooks: symptom, cause, fix, verification
+- [CONFIGURATION.md](operations/CONFIGURATION.md) — every setting, generating the keys, what a rotation breaks, and when Redis is needed
+- [RUNBOOKS.md](operations/RUNBOOKS.md) — 17 incident runbooks: symptom, cause, fix, verification
 
 **[team/](team/README.md)**
 

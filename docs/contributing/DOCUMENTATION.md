@@ -100,7 +100,7 @@ uvicorn app.main:app --reload                                  # terminal 1
 python scripts/capture_swagger_ui.py --only instance_create    # terminal 2
 ```
 
-Omit `--only` to rebuild all 29. A run has side effects on `monitoring.db` — it adds a
+Omit `--only` to rebuild all 31. A run has side effects on `monitoring.db` — it adds a
 client and resolves an alert — so delete the file and restart the server first, otherwise
 the captured numbers drift from [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 

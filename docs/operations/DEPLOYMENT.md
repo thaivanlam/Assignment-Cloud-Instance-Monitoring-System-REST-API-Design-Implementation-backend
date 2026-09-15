@@ -11,15 +11,17 @@ Configuration and secrets are a separate document:
 
 ## 1. What is being deployed
 
-One ASGI application and one file. There is no separate database server, no cache, no
-queue, and no required third-party service.
+One ASGI application and one file. There is no separate database server, no queue, and no
+required third-party service. Redis is optional: without it the short-lived state — login
+counters, revoked tokens, cached diagnoses — lives in the process's memory.
 
 | Piece | What it is | Notes |
 |---|---|---|
-| `app.main:app` | The FastAPI application | 19 endpoints plus `GET /` — [../api/ENDPOINTS.md](../api/ENDPOINTS.md) |
+| `app.main:app` | The FastAPI application | 20 endpoints plus `GET /` — [../api/ENDPOINTS.md](../api/ENDPOINTS.md) |
 | `monitoring.db` | SQLite file, created on first start | Plus `monitoring.db-wal` and `monitoring.db-shm` in WAL mode |
 | `.env` | Settings and secrets | Optional — every setting has a working default |
 | Anthropic API | Used only by `GET /api/instances/{id}/diagnosis` | Optional — the endpoint falls back to a rule-based answer |
+| Redis | Set by `REDIS_URL` | Optional for one worker; **required for the rate limit and logout to hold** across several workers, servers or serverless instances — [CONFIGURATION.md § 6](CONFIGURATION.md#6-redis_url--shared-state) |
 
 The consequence worth planning around: **the entire state of the system is one SQLite
 file next to the process.** Back that file up and you have backed up the deployment; put
@@ -33,7 +35,7 @@ the process somewhere the file does not survive and the deployment resets — se
 |---|---|
 | Python | Verified on **3.14.6**; 3.11+ expected (the code uses `X \| None` annotations) |
 | Disk | A writable working directory — SQLite writes the database, its WAL and its shared-memory file there |
-| Network | Outbound HTTPS to `api.anthropic.com` **only** if the LLM diagnosis path is wanted |
+| Network | Outbound HTTPS to `api.anthropic.com` **only** if the LLM diagnosis path is wanted; the Redis port **only** if `REDIS_URL` is set |
 | OS | Windows, Linux and macOS all supported; the commands below give both shells |
 
 Dependencies are listed in [../../requirements.txt](../../requirements.txt). The versions
@@ -161,7 +163,15 @@ single process serving 40 concurrent requests
 ([../performance/PERFORMANCE_BUGS.md § PERF-02](../performance/PERFORMANCE_BUGS.md#perf-02)).
 One worker is the configuration this project has been measured in; more workers is a
 change to make deliberately, with `DATABASE_URL` pointed at a real database server first
-([../design/DATABASE.md](../design/DATABASE.md)).
+([../design/DATABASE.md](../design/DATABASE.md)) — and with `REDIS_URL` set. Without Redis
+each worker keeps its own login counters and its own list of revoked tokens, so a logout
+only reaches the worker that served it
+([RUNBOOKS.md § R17](RUNBOOKS.md#r17--logout-or-the-login-limit-does-not-hold)).
+
+**Behind a reverse proxy, `--proxy-headers` is not optional.** The login rate limit counts
+failures per client address; without forwarded headers every user arrives from the
+proxy's address and shares one counter of 50
+([RUNBOOKS.md § R16](RUNBOOKS.md#r16--login-answers-429)).
 
 ### Keeping it running
 
@@ -226,6 +236,10 @@ platform rather than defects in this application:
   schema and re-seeds, so a resolved alert reappears and a created client disappears
   ([../performance/PERFORMANCE_BUGS.md § PERF-15](../performance/PERFORMANCE_BUGS.md#perf-15),
   [RUNBOOKS.md § R12](RUNBOOKS.md#r12--data-resets-or-resolved-alerts-come-back)).
+- **The login limit and logout do not hold without Redis.** Concurrent instances share no
+  memory and a cold start empties it. Set `REDIS_URL` to a managed Redis reachable from the
+  platform — a TLS `rediss://` URL is the usual form — with `vercel env add REDIS_URL
+  production`.
 
 That makes the serverless target suitable for a **demo of the API surface**, not for
 anything that must remember what it was told. Anything real needs `DATABASE_URL` pointing
@@ -239,7 +253,7 @@ out of the startup hook into a migration step.
 ```bash
 git pull
 .venv/bin/pip install -r requirements.txt   # only when requirements.txt changed
-pytest -q                                   # 123 passed — needs requirements-dev.txt
+pytest -q                                   # 149 passed — needs requirements-dev.txt
 sudo systemctl restart techvalley
 curl -s http://127.0.0.1:8000/              # then the rest of § 4
 ```

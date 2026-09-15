@@ -56,7 +56,31 @@ curl -X POST http://127.0.0.1:8000/api/auth/login \
   -d '{"email":"admin@techvalley.vn","password":"admin123!"}'
 ```
 
-**Errors** — `401` invalid credentials · `422` malformed email
+Failed attempts are rate-limited per account (10) and per client address (50) in
+15-minute windows; over either limit the request is refused before the password is
+checked — [AUTHENTICATION.md § 2](AUTHENTICATION.md#2-login-rate-limit).
+
+**Errors** — `401` invalid credentials · `422` malformed email · `429` too many failed
+attempts, with a `Retry-After` header in seconds
+
+---
+
+### `POST /api/auth/logout` — Revoke the current token
+
+Requires the Bearer token being revoked; no request body.
+
+**Response** `204` — no body. The same token then answers `401 Token has been revoked`
+everywhere. Other tokens of the same member stay valid.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/auth/logout \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The revocation lasts until the token's own expiry —
+[AUTHENTICATION.md § 4](AUTHENTICATION.md#4-logout-and-revocation).
+
+**Errors** — `401` missing, expired, invalid or already-revoked token
 
 ---
 
@@ -193,6 +217,11 @@ within about a minute in the worst case; a slower provider becomes a timeout, wh
 is a provider failure like any other and yields `source: "rule-based"`. The handler
 returns its database connection to the pool before making the call, so a diagnosis in
 flight does not occupy one.
+
+A model answer is cached for 30 minutes (`DIAGNOSIS_CACHE_TTL_SECONDS`) and reused while the
+instance and its recent alerts are unchanged; any change to either is a fresh call. The
+response is identical either way — a cached answer still reports `source: "llm"`. The
+rule-based fallback is never cached.
 
 **Response** `200` — `DiagnosisResponse`
 

@@ -17,6 +17,7 @@ JSON body out. Nothing calls a service function directly to assert on its return
 | Controllers, services, auth | Real — no mocks |
 | Database | Real SQLAlchemy against in-memory SQLite, seeded with the demo data |
 | Anthropic provider | **Stubbed** — see [section 6](#6-the-only-stub-the-llm-provider) |
+| Short-lived store (rate limit, revocation, diagnosis cache) | Real `MemoryStore` per test; the Redis backend runs against `fakeredis`, an in-process Redis — see [section 2](#2-isolation-one-database-per-test) |
 
 The consequence worth stating: a test failing here means the **observable behaviour** of
 an endpoint changed. It does not tell you which internal function changed, and that is
@@ -28,7 +29,7 @@ intentional — the suite exists to protect the contract documented in
 
 ## 2. Isolation: one database per test
 
-[../../tests/conftest.py](../../tests/conftest.py) provides two fixtures.
+[../../tests/conftest.py](../../tests/conftest.py) provides the fixtures below.
 
 **`api`** builds a fresh in-memory SQLite database for every single test, creates the
 schema, runs [app/seed.py](../../app/seed.py) against it, and overrides the `get_db`
@@ -60,6 +61,21 @@ Four details make this work:
 
 **`auth_headers`** logs in as all three demo accounts through `POST /api/auth/login` and
 returns ready-made `Authorization` headers keyed `admin`, `manager1`, `manager2`.
+
+**`store`** is autouse and gives every test a fresh `MemoryStore`
+([app/core/store.py](../../app/core/store.py)). The store is a process-wide singleton —
+login counters, revoked tokens and cached diagnoses — so without it one test's failed logins
+would lock the next test out. Replacing the singleton outright also means a `REDIS_URL` in a
+developer's `.env` can never point the suite at a real Redis.
+
+**`clock`** is the fake monotonic clock that `store` runs on. A test calls
+`clock.advance(seconds)` to move past a rate-limit window, a token's lifetime or a cache TTL
+instead of sleeping.
+
+**`redis_server`** swaps the store for `RedisStore` over `fakeredis`, an in-process Redis
+server. It returns `server` and `client`: the client lets a test inspect keys and TTLs, and
+`server.connected = False` makes every command raise `ConnectionError`, which is how the
+fail-open path is exercised.
 
 **`memoised_seed_hashing`** is session-scoped and autouse. Seeding runs once per test and
 hashes three demo passwords at 260,000 PBKDF2 iterations; memoising it for the session
@@ -102,21 +118,31 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-129 cases across six files. Each file covers one area of the API.
+149 cases across six files. Each file covers one area of the API.
 
-### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
+### 4.1 `test_auth.py` — health check, login limits, logout and the JWT guard (31 cases)
 
 | Case | Pins |
 |---|---|
 | `health_check_is_public` | `GET /` answers without a token |
-| `login_returns_a_usable_token_with_role_and_name` | Claims (`sub`, `email`, `role`, `exp`) are correct **and** the token authorises a real call |
+| `login_returns_a_usable_token_with_role_and_name` | Claims (`sub`, `email`, `role`, `exp`, `iat`, a 32-hex `jti`) are correct **and** the token authorises a real call |
 | `login_issues_the_manager_role_for_a_manager_account` | `role`/`name` reflect the account, not a default |
 | `login_rejects_bad_credentials_without_revealing_which_part_failed` | Wrong password and unknown email give the *same* `401` body — no account enumeration |
 | `login_rejects_a_malformed_email` | `422` from schema validation |
-| `protected_endpoints_reject_a_missing_token` | Nine endpoints, one per router, all `401` |
-| `invalid_tokens_are_rejected` | Garbage and foreign-secret tokens both `401 Invalid token` |
+| `protected_endpoints_reject_a_missing_token` | Ten endpoints — one per router, plus logout — all `401` |
+| `invalid_tokens_are_rejected` | Garbage, foreign-secret, and validly signed but `jti`-less tokens all `401 Invalid token` |
 | `expired_token_is_rejected` | `401 Token has expired` |
 | `token_for_a_member_that_no_longer_exists_is_rejected` | `401 Member no longer exists` |
+| `login_is_refused_once_an_account_reaches_its_failure_limit` | After 10 failures (in mixed letter case) the right password gets `429` with the exact `detail` and a `Retry-After` within the window — and `verify_password` is never called |
+| `the_account_limit_lifts_when_its_window_ends` | Moving the clock past the window lets the account log in again |
+| `a_successful_login_clears_the_account_counter` | 9 failures, a success, then a full 10 more failures all `401` |
+| `one_address_is_limited_across_many_accounts` | With the address limit at 3, failures against three different emails are `401` and the fourth is `429` |
+| `successful_logins_do_not_use_up_the_address_limit` | Six correct logins from one address under a limit of 3 all `200` |
+| `logout_revokes_the_token_it_was_called_with` | `204` with an empty body; that token then gets `401 Token has been revoked` on a read and on a second logout |
+| `logout_leaves_the_members_other_sessions_valid` | Two tokens for one account; logging out one leaves the other working |
+| `a_revocation_is_kept_only_as_long_as_the_token_lives` | The denylist entry exists after logout and is gone once the clock passes the token's lifetime |
+| `rate_limit_and_revocation_share_state_through_redis` | On the Redis backend: the limit and the revocation hold, keys carry `REDIS_KEY_PREFIX`, and every key has a TTL |
+| `a_redis_outage_fails_open` | With Redis disconnected, 11 bad logins are all `401` (no `429`), login still works, logout answers `204` and the "revoked" token still works |
 
 Rules: [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md),
 [../api/ERRORS.md](../api/ERRORS.md) §2.2.
@@ -231,7 +257,7 @@ Rules: [../business-rules/COST.md](../business-rules/COST.md),
 [../business-rules/SLA.md](../business-rules/SLA.md),
 [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md).
 
-### 4.6 `test_diagnosis.py` — the LLM endpoint (8 cases)
+### 4.6 `test_diagnosis.py` — the LLM endpoint and its cache (16 cases)
 
 | Case | Pins |
 |---|---|
@@ -243,6 +269,13 @@ Rules: [../business-rules/COST.md](../business-rules/COST.md),
 | `the_provider_client_is_built_once_and_reused` | Two diagnoses construct **one** SDK client, and it carries the 30 s timeout and single retry |
 | `diagnosis_works_for_a_healthy_instance_too` | The endpoint is not restricted to ERROR instances |
 | `diagnosis_enforces_scope_and_existence` | `403` / `404` |
+| `an_unchanged_instance_reuses_the_model_answer` | Two diagnoses of instance 5 — by different members — make **one** model call and return the same text with `source: "llm"` |
+| `a_changed_instance_is_diagnosed_again` | A new alert (the error scan) or a status change between two calls makes a second model call and a different answer |
+| `a_cached_answer_expires` | Moving the clock past `DIAGNOSIS_CACHE_TTL_SECONDS` makes a second model call |
+| `the_rule_based_fallback_is_never_cached` | A rule-based answer followed by an available model gives `source: "llm"` at once |
+| `a_zero_ttl_disables_the_cache` | `DIAGNOSIS_CACHE_TTL_SECONDS = 0`: two calls, two model calls, nothing stored |
+| `the_cache_works_through_redis` | On the Redis backend: one model call, one `diagnosis:5:*` key with a TTL within the setting |
+| `diagnosis_still_answers_when_redis_is_down` | With Redis disconnected every call reaches the model and every call answers `200` |
 
 Rules: [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md).
 
@@ -256,6 +289,7 @@ Every endpoint in [../api/ENDPOINTS.md](../api/ENDPOINTS.md) is exercised.
 |---|---|
 | `GET /` | `test_auth` |
 | `POST /api/auth/login` | `test_auth` |
+| `POST /api/auth/logout` | `test_auth` |
 | `POST /api/instances` | `test_instances`, `test_clients` |
 | `GET /api/instances` | `test_instances` |
 | `GET /api/instances/{id}` | `test_instances` |
@@ -293,7 +327,9 @@ process and cached ([../performance/PERFORMANCE_BUGS.md § PERF-14](../performan
 so without that reset a stubbed client would outlive the test that installed it and the
 next case to build one would silently get the previous one's.
 
-No other test touches the network, so the whole suite runs offline.
+No other test touches the network, so the whole suite runs offline. Redis is not a stub in
+this sense: `fakeredis` executes real Redis commands in-process, so `RedisStore` — its
+pipeline, TTLs and error handling — runs unmodified.
 
 ---
 
@@ -308,7 +344,10 @@ Stating these keeps a reader from assuming the gaps are oversights.
 | Performance and load | Out of scope for the assignment |
 | The real Anthropic API | Requires credentials and returns non-deterministic text — [section 6](#6-the-only-stub-the-llm-provider) |
 | `cost_snapshots` | Seeded but never read by any endpoint, so there is nothing to assert — noted in [../design/ERD.md](../design/ERD.md) |
-| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours |
+| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours; store TTLs are moved past with the `clock` fixture |
+| A real Redis server, and several worker processes | `fakeredis` runs the commands in-process. Sharing across processes follows from the design, not from a test — [../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state) |
+| The rate limit under concurrent requests | The reservation is atomic by construction (one `INCRBY` in Redis, one lock in memory), but no test fires parallel logins |
+| The client address behind a proxy | `TestClient` always reports `testclient`; forwarded headers are uvicorn's concern |
 
 ---
 

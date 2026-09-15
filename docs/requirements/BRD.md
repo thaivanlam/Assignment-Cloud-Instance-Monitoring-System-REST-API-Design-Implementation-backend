@@ -97,7 +97,7 @@ Stated explicitly, because each is the kind of thing a reader may assume is pres
 | **Notification delivery** | Alerts are recorded and readable. Nothing sends email, SMS or chat messages. |
 | **Background scheduling** | There is no scheduler or worker. Detection runs when a monitoring endpoint is called — see [BR-07](#5-business-requirements). |
 | **Client-facing logins** | Only TechValley staff have accounts. Client companies are data, not users. |
-| **Self-service account management** | No sign-up, password reset, profile edit or logout. Members are created by the seed. |
+| **Self-service account management** | No sign-up, password reset or profile edit. Members are created by the seed. (Logout exists — it revokes the token in use.) |
 | **Metered / hourly billing** | Pricing is a flat monthly figure per instance size. |
 | **Historical status tracking** | Only the *last* status change is stored, which is what limits SLA accuracy — see [BR-13](#5-business-requirements). |
 
@@ -167,7 +167,7 @@ may claim from the output.
 | **BR-07** Detection | Detection runs when someone calls a monitoring endpoint; there is no scheduler | Nothing is detected on a quiet Sunday unless a dashboard is polling. Operationally the answer is a polling dashboard; architecturally a scheduler is [out of scope](#42-out-of-scope) |
 | **BR-08** Incident record | Alerts are deleted with their instance | Deleting an instance erases its incident history. Acceptable while the register is the point; not acceptable if that history ever becomes an audit record |
 | **BR-11** Cost history | Month-over-month cost is designed for but not implemented — the `cost_snapshots` table is written by the seed and read by nothing | Cost questions can be answered for *now*, not for *last quarter* |
-| **BR-03 / BR-06** Access control | Fifteen security findings are recorded, two rated critical, none fixed | The boundary holds against ordinary mistakes, not against an attacker. Before any deployment outside a trusted network, work through [SECURITY_BUGS](../security/SECURITY_BUGS.md) |
+| **BR-03 / BR-06** Access control | Fifteen security findings are recorded, two rated critical; logout, the login rate limit and a revocable token (SEC-04, SEC-05, part of SEC-08) are fixed, both criticals are open | The boundary holds against ordinary mistakes, not against an attacker. Before any deployment outside a trusted network, work through [SECURITY_BUGS](../security/SECURITY_BUGS.md) |
 
 ---
 
@@ -207,7 +207,7 @@ Things a reader might expect, and the reason each is absent:
 | A scheduler for detection | No background worker in scope; the monitoring endpoints are the trigger |
 | Auto-resolution of alerts when a condition clears | Would erase the record that the incident happened ([ALERTING § 4](../business-rules/ALERTING.md#4-resolution)) |
 | Soft delete / audit trail | The register describes what exists now; history is a phase-2 concern |
-| Refresh tokens, logout, revocation | Tokens are short-lived and stateless; revocation is [SEC-04](../security/SECURITY_BUGS.md) and blocked on a token identifier |
+| Refresh tokens, revoking all of a member's sessions at once | Tokens are short-lived; single-token logout exists ([SEC-04](../security/SECURITY_BUGS.md#sec-04)), and a refresh path belongs with shortening the token ([SEC-14](../security/SECURITY_BUGS.md#sec-14)) |
 | Per-endpoint permission matrix | Two roles and one scoping rule cover every case; a matrix would add configuration without adding capability |
 | `404` instead of `403` for another manager's resource | Deliberate: an internal tool where a truthful `403` makes a misassigned client obvious ([AUTHORIZATION § 3](../business-rules/AUTHORIZATION.md#3-403-rather-than-404)) |
 

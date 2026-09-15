@@ -24,6 +24,11 @@ Notes
   resolves one alert. The demo instance it creates is deleted again by the last scenario,
   and instance 1 survives the DELETE because the RUNNING rule blocks it (that is the point).
   Delete monitoring.db and restart to get a pristine seed.
+* The last two scenarios change session state, which is why they are last: `logout_204`
+  revokes the ADMIN token this run authorized with, and `login_rate_limited_429` runs up
+  the failure counter for the second manager, whose sign-in stays locked for
+  LOGIN_WINDOW_SECONDS (15 minutes) afterwards. Restart the server to clear both when the
+  store is in memory.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +50,9 @@ except ImportError:  # pragma: no cover
 
 ADMIN = ("admin@techvalley.vn", "admin123!")
 MANAGER = ("lam@techvalley.vn", "manager123!")
+# Only the rate-limit scenario signs in as the second manager, so locking that account out
+# cannot break a scenario that runs after it.
+LOCKED_OUT = ("minh@techvalley.vn", "manager123!")
 
 # Swagger caps code blocks at ~400px and scrolls them internally, which silently truncates
 # long response bodies (the monitor report, instance lists, the LLM diagnosis) mid-JSON.
@@ -79,6 +88,8 @@ class Scenario:
     body: dict | None = None
     timeout: int = 30_000
     note: str = ""
+    # Runs before the operation is executed, for state the capture depends on.
+    prepare: Callable[["Runner"], None] | None = None
 
 
 DEMO_INSTANCE = "screenshot-demo-01"
@@ -91,6 +102,18 @@ def _demo_instance_id(ctx: "Runner") -> int | None:
         if item["instanceName"] == DEMO_INSTANCE:
             return item["id"]
     return None
+
+
+def _exhaust_login_attempts(ctx: "Runner") -> None:
+    """Fails LOCKED_OUT's login until the next attempt is refused, so the capture shows the
+    `429` answered even to the right password."""
+    for _ in range(50):
+        response = ctx.page.request.post(
+            f"{ctx.base_url}/api/auth/login",
+            data={"email": LOCKED_OUT[0], "password": "wrong-password"},
+        )
+        if response.status == 429:
+            return
 
 
 def _unresolved_alert_id(ctx: "Runner") -> int | None:
@@ -203,6 +226,17 @@ SCENARIOS: list[Scenario] = [
         path_params={"instance_id": _demo_instance_id},
         note="STOPPED instance deletes normally — also cleans up this run",
     ),
+    # ---------- session state (last: each one changes what later logins see) ----------
+    Scenario(
+        "logout_204", "POST", "/api/auth/logout", "admin", 204,
+        note="Revokes the token that authorized it",
+    ),
+    Scenario(
+        "login_rate_limited_429", "POST", "/api/auth/login", None, 429,
+        body={"email": LOCKED_OUT[0], "password": LOCKED_OUT[1]},
+        prepare=_exhaust_login_attempts,
+        note="Right password, refused after 10 failures",
+    ),
 ]
 
 
@@ -302,6 +336,9 @@ class Runner:
             if resolved is None:
                 return False, f"could not resolve path parameter {key!r} — skipped"
             path_params[key] = resolved
+
+        if scenario.prepare is not None:
+            scenario.prepare(self)
 
         self.set_auth(scenario.account)
 

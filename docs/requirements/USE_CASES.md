@@ -117,7 +117,7 @@ Values in the examples are the seeded demo data
 | **Goal** | Obtain a token that authorises the rest of the session |
 | **Trigger** | The member wants to use the system |
 | **Preconditions** | The member account exists |
-| **Postconditions** | The member holds a token valid for 120 minutes |
+| **Postconditions** | The member holds a token valid for 120 minutes, or until they sign out with it |
 
 **Main flow**
 
@@ -134,6 +134,8 @@ Values in the examples are the seeded demo data
 | **A2** | Malformed email | `422` from schema validation, before any lookup |
 | **A3** | The token later expires | `401 Token has expired`. There is no refresh endpoint; the member signs in again |
 | **A4** | The member's account is deleted after the token was issued | `401 Member no longer exists` on the next call — the member row is re-read on every request |
+| **A5** | Ten failed attempts for this account, or fifty from this address, within 15 minutes | `429 Too many failed login attempts` with `Retry-After`, even for the right password, until the window ends — the password is not checked |
+| **A6** | The member signs out with `POST /api/auth/logout` | `204`; that token answers `401 Token has been revoked` from then on. Tokens on the member's other devices are unaffected |
 
 **Rules** — the token carries `role`, but authorization always reads the role from the
 freshly loaded member row, never from the claim.
