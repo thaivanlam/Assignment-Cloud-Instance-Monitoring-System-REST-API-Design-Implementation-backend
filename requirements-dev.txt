@@ -6,6 +6,8 @@
 # API integration tests
 httpx2>=2.9
 pytest>=8.3
+# In-process Redis, so the Redis backend of app/core/store.py is tested with no server
+fakeredis>=2.26
 
 # Drives Swagger UI to capture per-endpoint screenshots (scripts/capture_swagger_ui.py)
 playwright>=1.49

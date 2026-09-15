@@ -17,6 +17,7 @@ JSON body out. Nothing calls a service function directly to assert on its return
 | Controllers, services, auth | Real — no mocks |
 | Database | Real SQLAlchemy against in-memory SQLite, seeded with the demo data |
 | Anthropic provider | **Stubbed** — see [section 6](#6-the-only-stub-the-llm-provider) |
+| Short-lived store | Real `MemoryStore` per test; the Redis backend runs against `fakeredis`, an in-process Redis — see [section 2](#2-isolation-one-database-per-test) |
 
 The consequence worth stating: a test failing here means the **observable behaviour** of
 an endpoint changed. It does not tell you which internal function changed, and that is
@@ -28,7 +29,7 @@ intentional — the suite exists to protect the contract documented in
 
 ## 2. Isolation: one database per test
 
-[../../tests/conftest.py](../../tests/conftest.py) provides two fixtures.
+[../../tests/conftest.py](../../tests/conftest.py) provides the fixtures below.
 
 **`api`** builds a fresh in-memory SQLite database for every single test, creates the
 schema, runs [app/seed.py](../../app/seed.py) against it, and overrides the `get_db`
@@ -60,6 +61,19 @@ Four details make this work:
 
 **`auth_headers`** logs in as all three demo accounts through `POST /api/auth/login` and
 returns ready-made `Authorization` headers keyed `admin`, `manager1`, `manager2`.
+
+**`store`** is autouse and gives every test a fresh `MemoryStore`
+([app/core/store.py](../../app/core/store.py)). The store is a process-wide singleton, so
+without it one test's stored values would reach the next. Replacing the singleton outright
+also means a `REDIS_URL` in a developer's `.env` can never point the suite at a real Redis.
+
+**`clock`** is the fake monotonic clock that `store` runs on. A test calls
+`clock.advance(seconds)` to move past a TTL instead of sleeping.
+
+**`redis_server`** swaps the store for `RedisStore` over `fakeredis`, an in-process Redis
+server. It returns `server` and `client`: the client lets a test inspect keys and TTLs, and
+`server.connected = False` makes every command raise `ConnectionError`, which is how the
+fail-open path is exercised.
 
 **`memoised_seed_hashing`** is session-scoped and autouse. Seeding runs once per test and
 hashes three demo passwords at 260,000 PBKDF2 iterations; memoising it for the session
@@ -293,7 +307,9 @@ process and cached ([../performance/PERFORMANCE_BUGS.md § PERF-14](../performan
 so without that reset a stubbed client would outlive the test that installed it and the
 next case to build one would silently get the previous one's.
 
-No other test touches the network, so the whole suite runs offline.
+No other test touches the network, so the whole suite runs offline. Redis is not a stub in
+this sense: `fakeredis` executes real Redis commands in-process, so `RedisStore` — its
+pipeline, TTLs and error handling — runs unmodified.
 
 ---
 
@@ -308,7 +324,8 @@ Stating these keeps a reader from assuming the gaps are oversights.
 | Performance and load | Out of scope for the assignment |
 | The real Anthropic API | Requires credentials and returns non-deterministic text — [section 6](#6-the-only-stub-the-llm-provider) |
 | `cost_snapshots` | Seeded but never read by any endpoint, so there is nothing to assert — noted in [../design/ERD.md](../design/ERD.md) |
-| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours |
+| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours; store TTLs are moved past with the `clock` fixture |
+| A real Redis server, and several worker processes | `fakeredis` runs the commands in-process. Sharing across processes follows from the design, not from a test — [../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state) |
 
 ---
 

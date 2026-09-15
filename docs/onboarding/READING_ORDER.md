@@ -12,8 +12,9 @@ models before the services, the services before the controllers that delegate to
   to change code safely inside one vertical slice.
 - **Prerequisites:** Python, and enough FastAPI to recognise `Depends`. SQLAlchemy 2.0 and
   Pydantic v2 details are explained where they first appear.
-- **Scope:** 83 numbered stops across the 18 source files under `app/`, plus the seed and
-  the test fixtures.
+- **Scope:** 88 numbered stops across the 19 source files under `app/`, plus the seed and
+  the test fixtures. Stops added after the original numbering carry a letter (`27a`,
+  `32b`) so every number cited elsewhere keeps its meaning.
 
 ---
 
@@ -24,13 +25,13 @@ models before the services, the services before the controllers that delegate to
 | [0](#stage-0--run-it-before-you-read-it) | What the API does from outside | — | — |
 | [1](#stage-1--the-entry-point) | How the app is assembled | `main.py` | 7 |
 | [2](#stage-2--foundations-config-session-tables-dtos) | Settings, session, pagination, tables, DTOs | `config.py`, `database.py`, `pagination.py`, `models/`, `schemas/` | 12 |
-| [3](#stage-3--authentication-and-role-scoping) | Who the caller is, and what they may see | `core/`, `auth_controller.py` | 13 |
+| [3](#stage-3--authentication-and-role-scoping) | Who the caller is, and what they may see | `core/`, `auth_controller.py` | 15 |
 | [4](#stage-4--the-reference-vertical-slice-instances) | The pattern every feature follows | `instance_service.py`, `instance_controller.py` | 12 |
 | [5](#stage-5--monitoring-where-the-business-rules-live) | Thresholds, auto-alerts, deduplication, the batched scan | `monitor_service.py`, `monitor_controller.py` | 12 |
 | [6](#stage-6--alerts) | Alert history and resolution | `alert_service.py`, `alert_controller.py` | 4 |
 | [7](#stage-7--clients-cost-and-sla) | Money and uptime arithmetic | `client_service.py`, `client_controller.py` | 15 |
 | [8](#stage-8--the-llm-diagnosis-feature) | The one external call, and its fallback | `llm_service.py` | 5 |
-| [9](#stage-9--seed-data-and-tests) | Where the demo numbers come from | `seed.py`, `tests/` | 3 |
+| [9](#stage-9--seed-data-and-tests) | Where the demo numbers come from | `seed.py`, `tests/` | 6 |
 
 ---
 
@@ -91,7 +92,8 @@ Four files, in this order. Each is used by everything after it.
 
 - `Settings` — a pydantic-settings `BaseSettings`, so every field can be overridden by an
   environment variable or `.env` entry without touching code. Note `CPU_WARNING_THRESHOLD`
-  (80.0) and `LONG_STOPPED_HOURS` (48); Stage 5 is the code that reads them.
+  (80.0) and `LONG_STOPPED_HOURS` (48); Stage 5 is the code that reads them. The
+  `REDIS_URL` fields are read in Stage 3.
 - `UNIT_PRICES` — `SMALL 50` / `MEDIUM 120` / `LARGE 250`. Read by Stages 4 and 7.
 - `SLA_THRESHOLDS` — `PREMIUM 99.9` / `STANDARD 99` / `BASIC 95`. Read by Stage 7.
 
@@ -194,6 +196,16 @@ FastAPI, readable in isolation.
 | 25 | `verify_password` | [security.py:19](../../app/core/security.py#L19) | Splits that string apart again and compares with `hmac.compare_digest`. A malformed stored value returns `False` rather than raising. |
 | 26 | `create_access_token` | [security.py:30](../../app/core/security.py#L30) | Claims: `sub` (member id as a string), `email`, `role`, `exp`. |
 | 27 | `decode_access_token` | [security.py:41](../../app/core/security.py#L41) | Verifies signature and expiry; raises PyJWT errors for the caller to translate. |
+
+### 3.2b `app/core/store.py` — state that expires
+
+[app/core/store.py](../../app/core/store.py) is the only place outside the database that
+remembers anything between requests.
+
+| # | Function | Line | What to take away |
+|---:|---|---|---|
+| 27a | `MemoryStore`, `RedisStore` | [store.py:37](../../app/core/store.py#L37) | One contract — `get`, `set`, `exists`, `delete`, and `add`, which returns `(count, seconds left)` — in two backends. Every value has a TTL. `RedisStore` catches every `RedisError` and answers "nothing stored": **fail open**. `MemoryStore` takes a clock so tests can move time. |
+| 27b | `get_store` | [store.py:160](../../app/core/store.py#L160) | Picks the backend once per process from `REDIS_URL` — the same double-checked-lock shape as stop 76. Empty means memory, which is only correct for one worker. |
 
 ### 3.3 `app/controllers/auth_controller.py` — the first complete request
 
@@ -435,15 +447,18 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 
 ### 9.2 `tests/`
 
-[tests/conftest.py](../../tests/conftest.py) first — four fixtures, and they explain how
-129 tests run in seconds:
+[tests/conftest.py](../../tests/conftest.py) first — seven fixtures, and they explain how
+129 tests stay isolated and fast:
 
 | # | Fixture | Line | What to take away |
 |---:|---|---|---|
-| 81 | `memoised_seed_hashing` | [conftest.py:18](../../tests/conftest.py#L18) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
-| 82 | `api` | [conftest.py:35](../../tests/conftest.py#L35) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
-| 83 | `auth_headers` | [conftest.py:74](../../tests/conftest.py#L74) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
-| 84 | `empty_scope_headers` | [conftest.py:93](../../tests/conftest.py#L93) | A fourth account the seed does not create: a `CLIENT_MANAGER` with no clients. It exists because an empty scope is the case both guards of stop 31–32 are easiest to get wrong — it has to keep meaning *nothing*. |
+| 81 | `memoised_seed_hashing` | [conftest.py:22](../../tests/conftest.py#L22) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
+| 81a | `clock` | [conftest.py:52](../../tests/conftest.py#L52) | A `FakeClock` the test advances by hand, so TTLs pass without sleeping. |
+| 81b | `store` | [conftest.py:57](../../tests/conftest.py#L57) | Autouse: a fresh `MemoryStore` on that clock for every test (stop 27a), so no test inherits another's stored values — and a developer's `REDIS_URL` never reaches the suite. |
+| 81c | `redis_server` | [conftest.py:71](../../tests/conftest.py#L71) | Swaps in `RedisStore` over `fakeredis`. `server.connected = False` simulates an outage. |
+| 82 | `api` | [conftest.py:86](../../tests/conftest.py#L86) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
+| 83 | `auth_headers` | [conftest.py:125](../../tests/conftest.py#L125) | Logs in as all three demo accounts and returns ready-made `Authorization` headers — most tests start here. |
+| 84 | `empty_scope_headers` | [conftest.py:144](../../tests/conftest.py#L144) | A fourth account the seed does not create: a `CLIENT_MANAGER` with no clients. It exists because an empty scope is the case both guards of stop 31–32 are easiest to get wrong — it has to keep meaning *nothing*. |
 
 Then read the suites in the same order as this document:
 
@@ -494,6 +509,7 @@ reading the linked document first.
 | SLA uptime called "approximate" | No status-history table exists to be exact against | [../business-rules/SLA.md](../business-rules/SLA.md) |
 | `in_(client_ids)` over a `SELECT`, not a list | The scope rides inside the query instead of costing one of its own | [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md), [../performance/PERFORMANCE_BUGS.md § PERF-10](../performance/PERFORMANCE_BUGS.md#perf-10) |
 | Cost stored on the row, not computed | Priced once at creation, from `UNIT_PRICES` | [../business-rules/COST.md](../business-rules/COST.md) |
+| `RedisStore` swallows every Redis error | Fail open: a Redis outage behaves as if nothing were stored instead of failing requests | [../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state) |
 
 ---
 

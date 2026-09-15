@@ -1,5 +1,7 @@
 import functools
+import types
 
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -7,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app import seed as seed_module
+from app.config import settings
+from app.core import store as store_module
 from app.core.security import hash_password
 from app.database import Base, get_db
 from app.models import Member, Role
@@ -29,6 +33,53 @@ def memoised_seed_hashing():
         yield
     finally:
         seed_module.hash_password = original
+
+
+class FakeClock:
+    """A monotonic clock a test moves by hand, so windows and TTLs pass without sleeping."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
+@pytest.fixture(autouse=True)
+def store(monkeypatch, clock):
+    """A fresh in-memory store for every test — login counters, revoked tokens, cached
+    diagnoses.
+
+    The store is a process-wide singleton, so without this a test's failed logins or cached
+    diagnosis would carry into the next one. Replacing it outright also means a `REDIS_URL`
+    in a developer's `.env` can never point the suite at a real Redis.
+    """
+    fresh = store_module.MemoryStore(clock=clock)
+    monkeypatch.setattr(store_module, "_store", fresh)
+    return fresh
+
+
+@pytest.fixture
+def redis_server(monkeypatch):
+    """Swaps the store for the Redis backend, over an in-process fake Redis server.
+
+    Returns the server and a client on it. Setting `server.connected = False` makes every
+    command raise `ConnectionError`, which is how the fail-open path is exercised.
+    """
+    server = fakeredis.FakeServer()
+    client = fakeredis.FakeRedis(server=server, decode_responses=True)
+    monkeypatch.setattr(
+        store_module, "_store", store_module.RedisStore(client, settings.REDIS_KEY_PREFIX)
+    )
+    return types.SimpleNamespace(server=server, client=client)
 
 
 @pytest.fixture

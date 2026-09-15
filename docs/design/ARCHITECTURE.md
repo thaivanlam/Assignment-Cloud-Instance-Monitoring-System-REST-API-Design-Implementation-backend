@@ -3,7 +3,7 @@
 MVC layering, request flow, and where each kind of logic belongs.
 
 **Stack:** Python · FastAPI · SQLAlchemy 2.0 (SQLite) · Pydantic v2 · PyJWT ·
-Anthropic SDK
+Anthropic SDK · redis-py (optional Redis)
 
 ---
 
@@ -20,7 +20,8 @@ app/
 ├── schemas/                 V — Pydantic request/response DTOs
 ├── controllers/             C — APIRouter endpoints
 ├── services/                Business logic
-└── core/                    JWT security, auth dependencies, domain exceptions
+└── core/                    JWT security, auth dependencies, domain exceptions,
+                             the short-lived store
 ```
 
 | Directory | Responsibility | Must not |
@@ -29,7 +30,7 @@ app/
 | `schemas/` | Request validation and response serialisation | Touch the database |
 | `controllers/` | Routing, dependency wiring, access assertions | Contain calculations or queries beyond trivial lookups |
 | `services/` | Every rule, threshold, and query | Import FastAPI or raise `HTTPException` for domain failures |
-| `core/` | JWT issue/verify, auth dependencies, domain exception types | Contain feature logic |
+| `core/` | JWT issue/verify, auth dependencies, domain exception types, and the short-lived store | Contain feature logic |
 
 The boundary that matters most: **services raise domain exceptions, not HTTP errors.**
 `NotFoundException`, `ActiveInstanceException`, and `ValidationException` are plain
@@ -39,6 +40,22 @@ service layer testable without a web client and keeps HTTP vocabulary out of the
 
 The exception is `app/core/deps.py`, which raises `HTTPException` directly — it is
 already an HTTP-layer concern, so there is nothing to decouple.
+
+### The short-lived store
+
+[app/core/store.py](../../app/core/store.py) holds state that is neither a table nor
+configuration: values that must outlive one request but not a restart. Every value has a
+TTL. One interface, two backends, picked once per process by `get_store()`:
+
+| `REDIS_URL` | Backend | Shared between processes |
+|---|---|---|
+| empty | `MemoryStore` — a locked dictionary | No |
+| set | `RedisStore` — redis-py with a 0.5 s timeout | Yes |
+
+`RedisStore` fails open: a Redis error is logged and answered as "nothing stored", so an
+outage degrades whatever relies on the store rather than failing requests. The operational
+side — when the in-memory backend stops being correct — is
+[../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state).
 
 [app/pagination.py](../../app/pagination.py) sits outside the table above because it
 straddles two of its rows deliberately: it declares the `page` and `size` query
@@ -216,6 +233,7 @@ runs with no configuration at all.
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `120` | Token lifetime |
 | `DATABASE_URL` | `sqlite:///./monitoring.db` | Engine |
 | `ANTHROPIC_API_KEY` | `""` | LLM path; empty is a supported configuration |
+| `REDIS_URL` / `REDIS_KEY_PREFIX` | `""` / `techvalley:` | `get_store()` — empty selects the in-memory store |
 | `CPU_WARNING_THRESHOLD` | `80.0` | Warning detection |
 | `LONG_STOPPED_HOURS` | `48` | Long-stopped detection |
 | `PRICE_SMALL/MEDIUM/LARGE` | `50` / `120` / `250` | Unit pricing |

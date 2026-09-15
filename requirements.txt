@@ -6,3 +6,4 @@ pydantic-settings>=2.7
 PyJWT>=2.10
 email-validator>=2.2
 anthropic>=0.116.0
+redis>=5.2

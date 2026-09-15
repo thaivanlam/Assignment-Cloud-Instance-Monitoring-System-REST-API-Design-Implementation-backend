@@ -48,13 +48,15 @@ that the file with the secrets in it never has to be.
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `120` | Token lifetime | Shorter for a shared demo, longer for a long walkthrough |
 | `DATABASE_URL` | `sqlite:///./monitoring.db` | Which database is opened, and which pool — § 5 | Moving off the local file |
 | `ANTHROPIC_API_KEY` | `""` (empty) | The LLM diagnosis path — § 4 | Enabling real diagnoses |
-| `CPU_WARNING_THRESHOLD` | `80.0` | The CPU % above which a scan raises `CPU_HIGH` | § 6 |
-| `LONG_STOPPED_HOURS` | `48` | How long `STOPPED` counts as long-stopped | § 6 |
-| `PRICE_SMALL` / `PRICE_MEDIUM` / `PRICE_LARGE` | `50` / `120` / `250` | Monthly unit price per instance type | § 6 |
-| `SLA_PREMIUM` / `SLA_STANDARD` / `SLA_BASIC` | `99.9` / `99.0` / `95.0` | Uptime target per contract plan | § 6 |
+| `REDIS_URL` | `""` (empty) | Where short-lived state lives — § 6 | Running more than one worker process or server |
+| `REDIS_KEY_PREFIX` | `techvalley:` | Prefix on every Redis key — § 6 | Sharing one Redis between deployments |
+| `CPU_WARNING_THRESHOLD` | `80.0` | The CPU % above which a scan raises `CPU_HIGH` | § 7 |
+| `LONG_STOPPED_HOURS` | `48` | How long `STOPPED` counts as long-stopped | § 7 |
+| `PRICE_SMALL` / `PRICE_MEDIUM` / `PRICE_LARGE` | `50` / `120` / `250` | Monthly unit price per instance type | § 7 |
+| `SLA_PREMIUM` / `SLA_STANDARD` / `SLA_BASIC` | `99.9` / `99.0` / `95.0` | Uptime target per contract plan | § 7 |
 
 Unknown variables are ignored (`extra="ignore"`), so a typo in a name is silent — the app
-starts and uses the default. § 7 shows how to read back what it actually loaded.
+starts and uses the default. § 8 shows how to read back what it actually loaded.
 
 ---
 
@@ -165,7 +167,54 @@ Two operational cautions:
 
 ---
 
-## 6. Business thresholds — changing them changes documented numbers
+## 6. `REDIS_URL` — shared state
+
+State that must outlive a request but not a restart — every value carrying a TTL — is kept
+in the store `REDIS_URL` selects ([../../app/core/store.py](../../app/core/store.py)):
+
+```bash
+REDIS_URL=                                   # default — process memory
+REDIS_URL=redis://localhost:6379/0           # local or same-host Redis
+REDIS_URL=rediss://:<password>@host:6380/0   # TLS, with a password — managed Redis
+```
+
+| `REDIS_URL` | Store | Right for |
+|---|---|---|
+| empty | A dictionary in the process | **One** worker process: `uvicorn` without `--workers`, the test suite |
+| set | Redis, one key space for every process | `--workers N`, several servers, serverless instances |
+
+**Why one worker is fine without it, and more is not.** Every value is per process when the
+store is in memory: with four workers, each holds its own copy and none sees what another
+stored. None of that is visible as an error, which is why the setting matters.
+
+**Behaviour of the Redis store.**
+
+| Situation | What happens |
+|---|---|
+| Redis is down at startup | The app starts. redis-py connects on the first command, not at construction |
+| Redis is unreachable or slow | Each call gives up after 0.5 s and **fails open**: a read answers "nothing stored" and a write is dropped — each failure logs `Redis … failed, continuing without it` at `WARNING`. No request fails because of Redis |
+| Redis restarts empty | Everything stored is forgotten, as with a process restart on the in-memory store |
+| Several deployments share one Redis | Give each its own `REDIS_KEY_PREFIX`; otherwise they read each other's keys |
+
+Every key carries a TTL, so Redis needs no eviction policy or cleanup job for this
+application. Any Redis 6 or later works; nothing uses a command newer than that.
+
+**Running one locally.** Redis publishes no Windows build, so on Windows use Docker or WSL:
+
+```bash
+docker run -d --name techvalley-redis -p 6379:6379 redis:7-alpine
+docker exec techvalley-redis redis-cli ping          # PONG
+```
+
+**Checking what it holds:**
+
+```bash
+redis-cli --scan --pattern 'techvalley:*'
+```
+
+---
+
+## 7. Business thresholds — changing them changes documented numbers
 
 `CPU_WARNING_THRESHOLD`, `LONG_STOPPED_HOURS`, the three prices and the three SLA targets
 are configuration, but they are also the numbers the rest of the documentation states as
@@ -190,16 +239,16 @@ not rewrite the `monthlyCost` already stored on existing rows.
 
 ---
 
-## 7. Read back the effective configuration
+## 8. Read back the effective configuration
 
 The fastest way to end an argument about which value is actually in force. It prints what
-the process loaded, with the two secrets reduced to a length:
+the process loaded, with the secrets reduced to a length:
 
 ```bash
 python -c "
 from app.config import settings
 d = settings.model_dump()
-for k in ('SECRET_KEY', 'ANTHROPIC_API_KEY'):
+for k in ('SECRET_KEY', 'ANTHROPIC_API_KEY', 'REDIS_URL'):
     d[k] = f'<set, {len(d[k])} chars>' if d[k] else '<empty>'
 for k, v in d.items():
     print(f'{k} = {v}')
@@ -222,7 +271,7 @@ otherwise it reads a different `.env` and reports values the server never saw.
 
 ---
 
-## 8. Secret hygiene
+## 9. Secret hygiene
 
 - `.env` is gitignored. Keep it that way; put deployment secrets in the platform's own
   store (systemd `EnvironmentFile` with `0600`, `vercel env add`, the container's secret
@@ -235,10 +284,12 @@ otherwise it reads a different `.env` and reports values the server never saw.
   accounts changed or removed — the seed creates them on any empty database.
 - Rotating `SECRET_KEY` invalidates every issued token (§ 3). Plan it as a brief forced
   re-login, not as a transparent change.
+- `REDIS_URL` can carry a password (`rediss://:<password>@host`). Treat it as a secret like
+  the other two, and keep Redis itself off the public network.
 
 ---
 
-## 9. Related
+## 10. Related
 
 | Document | Why |
 |---|---|
@@ -249,4 +300,4 @@ otherwise it reads a different `.env` and reports values the server never saw.
 | [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) | The endpoint `ANTHROPIC_API_KEY` enables, and its fallback |
 | [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md) | The tokens `SECRET_KEY` signs |
 | [../business-rules/README.md](../business-rules/README.md) | The rules the threshold settings parameterise |
-| [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) | The seeded credentials § 8 warns about |
+| [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) | The seeded credentials § 9 warns about |

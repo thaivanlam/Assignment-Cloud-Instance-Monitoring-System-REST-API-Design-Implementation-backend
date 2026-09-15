@@ -366,7 +366,7 @@ Error code: 401 - {'type': 'error', 'error': {'type': 'authentication_error',
 | `429` / `529` | Rate limited or overloaded — retry later; nothing to fix here |
 | `Connection error` / a timeout | No outbound HTTPS to `api.anthropic.com` — check egress rules and any proxy |
 | `No module named 'anthropic'` | Dependencies incomplete — `pip install -r requirements.txt` |
-| No warning at all | The key never reached the process — [CONFIGURATION.md § 7](CONFIGURATION.md#7-read-back-the-effective-configuration) |
+| No warning at all | The key never reached the process — [CONFIGURATION.md § 8](CONFIGURATION.md#8-read-back-the-effective-configuration) |
 
 Remember that settings are read at import time: a key added to `.env` after the server
 started is not in use until it restarts.
@@ -514,7 +514,7 @@ journalctl -u techvalley -n 200            # the log around the failure
 ```
 
 Plus the effective configuration with the secrets redacted
-([CONFIGURATION.md § 7](CONFIGURATION.md#7-read-back-the-effective-configuration)) — never
+([CONFIGURATION.md § 8](CONFIGURATION.md#8-read-back-the-effective-configuration)) — never
 the values themselves.
 
 ---

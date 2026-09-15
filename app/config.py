@@ -13,6 +13,11 @@ class Settings(BaseSettings):
 
     ANTHROPIC_API_KEY: str = ""
 
+    # Shared short-lived state — values that must outlive a request but not a restart.
+    # Empty keeps it in process memory, which is correct for a single worker only.
+    REDIS_URL: str = ""
+    REDIS_KEY_PREFIX: str = "techvalley:"
+
     # Business rules
     CPU_WARNING_THRESHOLD: float = 80.0
     LONG_STOPPED_HOURS: int = 48

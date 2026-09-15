@@ -24,8 +24,9 @@ pytest -q            # 129 passed
 
 Every test drives the API over HTTP against a fresh in-memory database seeded with the
 demo data, so expected values are exact — `$2,100` total monthly cost, warnings on
-instances `1, 4, 11, 14`, and so on. Nothing is mocked except the Anthropic call, which
-means the suite needs no API key, no network, and no running server.
+instances `1, 4, 11, 14`, and so on. Nothing is mocked except the Anthropic call — Redis runs as
+`fakeredis`, in-process — which means the suite needs no API key, no network, no Redis
+and no running server.
 
 The same numbers appear in [../demo/SEED_DATA.md](../demo/SEED_DATA.md) and
 [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md); the tests are what keeps those
