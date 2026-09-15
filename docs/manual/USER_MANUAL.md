@@ -493,6 +493,10 @@ other **always** — a missing API key, a slow model or a provider outage never 
 without an answer, and never produces an error. The call can take up to about a minute in
 the worst case before falling back.
 
+Asking again for the same instance within 30 minutes returns the same AI-written note
+instantly, as long as nothing about the instance or its alerts has changed. If something
+has — a new alert, a status change — you get a freshly written one.
+
 It works on healthy instances too, if you want a second opinion before making a change.
 
 ---

@@ -6,15 +6,27 @@ Falls back to a deterministic rule-based diagnosis otherwise, so the endpoint
 always works in demo environments without an API key.
 """
 
+import hashlib
 import logging
 import threading
 
 from app.config import settings
+from app.core.store import get_store
 from app.models import Alert, Instance
 
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-opus-4-8"
+
+SYSTEM_PROMPT = (
+    "You are a senior cloud infrastructure engineer at TechValley, an IT "
+    "consulting firm monitoring cloud instances for client companies. "
+    "Given an instance in ERROR state, produce a concise incident diagnosis "
+    "in English with exactly three sections: "
+    "'Probable Causes' (2-4 bullet points, most likely first), "
+    "'Recommended Actions' (numbered, ordered steps), and "
+    "'Prevention' (1-2 bullets). Keep it under 250 words."
+)
 
 # The SDK's own defaults are a 600-second read timeout and 2 retries — up to ~30 minutes
 # of waiting for a single diagnosis, during which the request holds a threadpool worker.
@@ -81,6 +93,24 @@ def _build_context(instance: Instance, alerts: list[Alert]) -> str:
     )
 
 
+def _user_message(instance: Instance, alerts: list[Alert]) -> str:
+    return "Diagnose this cloud instance that is in ERROR state:\n\n" + _build_context(
+        instance, alerts
+    )
+
+
+def _cache_key(instance: Instance, alerts: list[Alert]) -> str:
+    """A key that changes whenever the model would be asked something different.
+
+    It hashes the request itself — model, system prompt and the rendered user message —
+    rather than a hand-picked list of fields. A status change, a new or resolved alert, a
+    CPU update or a prompt edit therefore lands on a new key on its own, and nothing ever
+    has to invalidate an old one: it simply stops being asked for and expires.
+    """
+    request = "\x00".join((MODEL, SYSTEM_PROMPT, _user_message(instance, alerts)))
+    return f"diagnosis:{instance.id}:{hashlib.sha256(request.encode()).hexdigest()}"
+
+
 def _llm_diagnosis(instance: Instance, alerts: list[Alert]) -> str | None:
     try:
         response = _get_client().messages.create(
@@ -89,24 +119,8 @@ def _llm_diagnosis(instance: Instance, alerts: list[Alert]) -> str | None:
             # tight cap can consume it all and return an empty or truncated answer.
             max_tokens=16000,
             thinking={"type": "adaptive"},
-            system=(
-                "You are a senior cloud infrastructure engineer at TechValley, an IT "
-                "consulting firm monitoring cloud instances for client companies. "
-                "Given an instance in ERROR state, produce a concise incident diagnosis "
-                "in English with exactly three sections: "
-                "'Probable Causes' (2-4 bullet points, most likely first), "
-                "'Recommended Actions' (numbered, ordered steps), and "
-                "'Prevention' (1-2 bullets). Keep it under 250 words."
-            ),
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Diagnose this cloud instance that is in ERROR state:\n\n"
-                        + _build_context(instance, alerts)
-                    ),
-                }
-            ],
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": _user_message(instance, alerts)}],
         )
         if response.stop_reason == "max_tokens":
             logger.warning("LLM diagnosis hit the max_tokens cap; the answer may be truncated")
@@ -148,8 +162,21 @@ def _rule_based_diagnosis(instance: Instance, alerts: list[Alert]) -> str:
 
 
 def diagnose(instance: Instance, alerts: list[Alert]) -> tuple[str, str]:
-    """Returns (diagnosis_text, source) where source is 'llm' or 'rule-based'."""
+    """Returns (diagnosis_text, source) where source is 'llm' or 'rule-based'.
+
+    A model answer is reused for `DIAGNOSIS_CACHE_TTL_SECONDS` while the instance and its
+    alerts are unchanged (`_cache_key`), so reopening an incident card does not pay for a
+    second provider call. Only model answers are stored: the rule-based text is instant to
+    rebuild, and caching it would keep serving the fallback after a key is configured.
+    """
+    ttl = settings.DIAGNOSIS_CACHE_TTL_SECONDS
+    key = _cache_key(instance, alerts) if ttl > 0 else None
+    if key is not None and (cached := get_store().get(key)) is not None:
+        return cached, "llm"
+
     text = _llm_diagnosis(instance, alerts)
     if text is not None:
+        if key is not None:
+            get_store().set(key, text, ttl=ttl)
         return text, "llm"
     return _rule_based_diagnosis(instance, alerts), "rule-based"

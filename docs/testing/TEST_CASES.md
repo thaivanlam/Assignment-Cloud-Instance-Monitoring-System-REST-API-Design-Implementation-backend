@@ -4,8 +4,8 @@
 |---|---|
 | System | TechValley Cloud Instance Monitoring System |
 | Document | Test Case specification |
-| Status | Baseline — matches the 129-case automated suite |
-| Last reviewed | 2026-09-01 |
+| Status | Baseline — matches the 137-case automated suite |
+| Last reviewed | 2026-09-15 |
 
 The test scenarios, conditions and data used to check the system for defects — each with
 a precondition, the call to make, the data to send, and the exact result to expect.
@@ -243,6 +243,13 @@ Column meanings: **Steps / data** is the call to make; **Expected** is the exact
 | **TC-DIAG-07** | P1 | manager1 token | Diagnose instance `10` (manager2's), then instance `999` | `403`, then `404` | `diagnosis_enforces_scope_and_existence` |
 | **TC-DIAG-08** | P2 | Provider that never answers | Same call | The response arrives within about a minute (30 s timeout, one retry) with `source` = `"rule-based"` | **Manual** — a timing property; specified in [SRS § NFR-PERF-04](../requirements/SRS.md#52-performance) |
 | **TC-DIAG-09** | P3 | Stubbed provider, two diagnoses in one process | `GET /api/instances/5/diagnosis` twice | Both answer `200` with `source` = `"llm"`, and the SDK client is constructed **once** — carrying the 30 s timeout and the single retry ([PERFORMANCE_BUGS § PERF-14](../performance/PERFORMANCE_BUGS.md#perf-14)) | `the_provider_client_is_built_once_and_reused` |
+| **TC-DIAG-10** | P2 | Provider available | Diagnose instance 5 as manager1, then as admin | Identical `diagnosis`, `source` = `"llm"`, **one** provider call ([LLM_FEATURE § 4.7](../design/LLM_FEATURE.md#47-the-answer-cache)) | `an_unchanged_instance_reuses_the_model_answer` |
+| **TC-DIAG-11** | P1 | Provider available | Diagnose 5; then (a) `GET /api/monitor/errors` or (b) `PATCH /api/instances/5/status` to `RUNNING`; diagnose 5 again | A second provider call and a different answer — a changed instance is never served a stale diagnosis | `a_changed_instance_is_diagnosed_again` |
+| **TC-DIAG-12** | P3 | Provider available | Diagnose 5, wait `DIAGNOSIS_CACHE_TTL_SECONDS`, diagnose again | A second provider call | `a_cached_answer_expires` |
+| **TC-DIAG-13** | P1 | **No** provider, then a provider | Diagnose 5 (rule-based), make the provider available, diagnose 5 again | The second answer is `source` = `"llm"` — the fallback is never cached | `the_rule_based_fallback_is_never_cached` |
+| **TC-DIAG-14** | P3 | `DIAGNOSIS_CACHE_TTL_SECONDS=0` | Diagnose 5 twice | Two provider calls; nothing stored | `a_zero_ttl_disables_the_cache` |
+| **TC-DIAG-15** | P3 | `REDIS_URL` set | Diagnose 5 twice | One provider call; one `techvalley:diagnosis:5:…` key with a TTL | `the_cache_works_through_redis` |
+| **TC-DIAG-16** | P2 | `REDIS_URL` set, Redis then stopped | Diagnose 5 twice | Both `200` with `source` = `"llm"`; each reaches the provider | `diagnosis_still_answers_when_redis_is_down` |
 
 ---
 
@@ -274,7 +281,7 @@ database is freshly seeded.
 
 1. Every P1 case passes. A P1 failure is a release blocker.
 2. Every P2 case passes, or the failure is recorded as a known defect with a decision.
-3. `pytest -q` reports **129 passed**.
+3. `pytest -q` reports **137 passed**.
 4. Any case whose expected value the change moved has been updated **in the same commit**,
    along with [../demo/SEED_DATA.md](../demo/SEED_DATA.md) and
    [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if the numbers there moved
@@ -316,7 +323,8 @@ Stated so no reader takes a green run as broader assurance than it is.
 | Token forgery, disclosure, injection | Reviewed separately — [SECURITY_BUGS](../security/SECURITY_BUGS.md). **A green suite verifies none of the security NFRs** |
 | The real Anthropic API | Needs credentials and returns non-deterministic text — the provider is the only stub in the suite |
 | `cost_snapshots` | Seeded but read by no endpoint, so there is nothing observable to assert |
-| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours |
+| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours; cache TTLs are passed with a fake clock |
+| A real Redis, several workers | The Redis backend runs against `fakeredis` in-process, one process — [FUNCTIONAL_TESTS § 7](FUNCTIONAL_TESTS.md#7-what-is-deliberately-not-covered) |
 
 ---
 
@@ -335,9 +343,9 @@ Requirement → the cases that verify it. Business-level traceability continues 
 | FR-06 Alert lifecycle | F-ALRT-01, F-ALRT-02 | TC-ALRT-01 … TC-ALRT-18 |
 | FR-07 Cost and forecast | F-CLNT-04, F-CLNT-05 | TC-CLNT-11 … TC-CLNT-17, TC-CLNT-23 |
 | FR-08 SLA reporting | F-CLNT-06 | TC-CLNT-18 … TC-CLNT-22 |
-| FR-09 Diagnosis | F-DIAG-01 | TC-DIAG-01 … TC-DIAG-09 |
+| FR-09 Diagnosis | F-DIAG-01 | TC-DIAG-01 … TC-DIAG-16 |
 | FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-09 |
-| NFR-REL-01 Provider never fails a request | F-DIAG-01 | TC-DIAG-01, TC-DIAG-04 |
+| NFR-REL-01 Provider never fails a request | F-DIAG-01 | TC-DIAG-01, TC-DIAG-04, TC-DIAG-16 |
 | NFR-REL-04 Repeated writes are no-ops | F-INST-04, F-ALRT-02 | TC-INST-17, TC-ALRT-14 |
 | NFR-REL-05 No orphaned alerts | F-INST-05 | TC-INST-21 |
 | NFR-REL-06 Pages partition exactly | F-X-01 | TC-INST-11, TC-ALRT-10, TC-MON-08 |

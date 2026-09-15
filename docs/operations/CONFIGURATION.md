@@ -50,6 +50,7 @@ that the file with the secrets in it never has to be.
 | `ANTHROPIC_API_KEY` | `""` (empty) | The LLM diagnosis path — § 4 | Enabling real diagnoses |
 | `REDIS_URL` | `""` (empty) | Where short-lived state lives — § 6 | Running more than one worker process or server |
 | `REDIS_KEY_PREFIX` | `techvalley:` | Prefix on every Redis key — § 6 | Sharing one Redis between deployments |
+| `DIAGNOSIS_CACHE_TTL_SECONDS` | `1800` | How long a model diagnosis is reused; `0` disables the cache — § 6 | Fresher or cheaper diagnoses |
 | `CPU_WARNING_THRESHOLD` | `80.0` | The CPU % above which a scan raises `CPU_HIGH` | § 7 |
 | `LONG_STOPPED_HOURS` | `48` | How long `STOPPED` counts as long-stopped | § 7 |
 | `PRICE_SMALL` / `PRICE_MEDIUM` / `PRICE_LARGE` | `50` / `120` / `250` | Monthly unit price per instance type | § 7 |
@@ -170,7 +171,9 @@ Two operational cautions:
 ## 6. `REDIS_URL` — shared state
 
 State that must outlive a request but not a restart — every value carrying a TTL — is kept
-in the store `REDIS_URL` selects ([../../app/core/store.py](../../app/core/store.py)):
+in the store `REDIS_URL` selects ([../../app/core/store.py](../../app/core/store.py)). The
+diagnosis cache ([../design/LLM_FEATURE.md § 4.7](../design/LLM_FEATURE.md#47-the-answer-cache))
+keeps its answers there:
 
 ```bash
 REDIS_URL=                                   # default — process memory

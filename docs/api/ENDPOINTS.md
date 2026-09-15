@@ -194,6 +194,11 @@ is a provider failure like any other and yields `source: "rule-based"`. The hand
 returns its database connection to the pool before making the call, so a diagnosis in
 flight does not occupy one.
 
+A model answer is cached for 30 minutes (`DIAGNOSIS_CACHE_TTL_SECONDS`) and reused while the
+instance and its recent alerts are unchanged; any change to either is a fresh call. The
+response is identical either way — a cached answer still reports `source: "llm"`. The
+rule-based fallback is never cached.
+
 **Response** `200` — `DiagnosisResponse`
 
 | Field | Type | Notes |

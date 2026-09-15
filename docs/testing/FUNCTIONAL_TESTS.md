@@ -116,7 +116,7 @@ are what keeps those documents honest.
 
 ## 4. The suites
 
-129 cases across six files. Each file covers one area of the API.
+137 cases across six files. Each file covers one area of the API.
 
 ### 4.1 `test_auth.py` — health check and the JWT guard (19 cases)
 
@@ -245,7 +245,7 @@ Rules: [../business-rules/COST.md](../business-rules/COST.md),
 [../business-rules/SLA.md](../business-rules/SLA.md),
 [../business-rules/AUTHORIZATION.md](../business-rules/AUTHORIZATION.md).
 
-### 4.6 `test_diagnosis.py` — the LLM endpoint (8 cases)
+### 4.6 `test_diagnosis.py` — the LLM endpoint and its cache (16 cases)
 
 | Case | Pins |
 |---|---|
@@ -257,6 +257,13 @@ Rules: [../business-rules/COST.md](../business-rules/COST.md),
 | `the_provider_client_is_built_once_and_reused` | Two diagnoses construct **one** SDK client, and it carries the 30 s timeout and single retry |
 | `diagnosis_works_for_a_healthy_instance_too` | The endpoint is not restricted to ERROR instances |
 | `diagnosis_enforces_scope_and_existence` | `403` / `404` |
+| `an_unchanged_instance_reuses_the_model_answer` | Two diagnoses of instance 5 — by different members — make **one** model call and return the same text with `source: "llm"` |
+| `a_changed_instance_is_diagnosed_again` | A new alert (the error scan) or a status change between two calls makes a second model call and a different answer |
+| `a_cached_answer_expires` | Moving the clock past `DIAGNOSIS_CACHE_TTL_SECONDS` makes a second model call |
+| `the_rule_based_fallback_is_never_cached` | A rule-based answer followed by an available model gives `source: "llm"` at once |
+| `a_zero_ttl_disables_the_cache` | `DIAGNOSIS_CACHE_TTL_SECONDS = 0`: two calls, two model calls, nothing stored |
+| `the_cache_works_through_redis` | On the Redis backend: one model call, one `diagnosis:5:*` key with a TTL within the setting |
+| `diagnosis_still_answers_when_redis_is_down` | With Redis disconnected every call reaches the model and every call answers `200` |
 
 Rules: [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md).
 

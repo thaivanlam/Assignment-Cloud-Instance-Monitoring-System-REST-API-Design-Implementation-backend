@@ -19,7 +19,7 @@ isolation, and what it deliberately leaves out.
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q            # 129 passed
+pytest -q            # 137 passed
 ```
 
 Every test drives the API over HTTP against a fresh in-memory database seeded with the

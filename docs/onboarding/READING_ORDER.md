@@ -12,7 +12,7 @@ models before the services, the services before the controllers that delegate to
   to change code safely inside one vertical slice.
 - **Prerequisites:** Python, and enough FastAPI to recognise `Depends`. SQLAlchemy 2.0 and
   Pydantic v2 details are explained where they first appear.
-- **Scope:** 88 numbered stops across the 19 source files under `app/`, plus the seed and
+- **Scope:** 89 numbered stops across the 19 source files under `app/`, plus the seed and
   the test fixtures. Stops added after the original numbering carry a letter (`27a`,
   `32b`) so every number cited elsewhere keeps its meaning.
 
@@ -30,7 +30,7 @@ models before the services, the services before the controllers that delegate to
 | [5](#stage-5--monitoring-where-the-business-rules-live) | Thresholds, auto-alerts, deduplication, the batched scan | `monitor_service.py`, `monitor_controller.py` | 12 |
 | [6](#stage-6--alerts) | Alert history and resolution | `alert_service.py`, `alert_controller.py` | 4 |
 | [7](#stage-7--clients-cost-and-sla) | Money and uptime arithmetic | `client_service.py`, `client_controller.py` | 15 |
-| [8](#stage-8--the-llm-diagnosis-feature) | The one external call, and its fallback | `llm_service.py` | 5 |
+| [8](#stage-8--the-llm-diagnosis-feature) | The one external call, its cache, and its fallback | `llm_service.py` | 6 |
 | [9](#stage-9--seed-data-and-tests) | Where the demo numbers come from | `seed.py`, `tests/` | 6 |
 
 ---
@@ -93,7 +93,7 @@ Four files, in this order. Each is used by everything after it.
 - `Settings` — a pydantic-settings `BaseSettings`, so every field can be overridden by an
   environment variable or `.env` entry without touching code. Note `CPU_WARNING_THRESHOLD`
   (80.0) and `LONG_STOPPED_HOURS` (48); Stage 5 is the code that reads them. The
-  `REDIS_URL` fields are read in Stage 3.
+  `REDIS_URL` fields are read in Stage 3, `DIAGNOSIS_CACHE_TTL_SECONDS` in Stage 8.
 - `UNIT_PRICES` — `SMALL 50` / `MEDIUM 120` / `LARGE 250`. Read by Stages 4 and 7.
 - `SLA_THRESHOLDS` — `PREMIUM 99.9` / `STANDARD 99` / `BASIC 95`. Read by Stage 7.
 
@@ -408,15 +408,16 @@ endpoints; the first uses `require_admin`, the rest `get_client` + `assert_clien
 [app/services/llm_service.py](../../app/services/llm_service.py) — the only outbound
 network call in the system, and the only function that must never fail.
 
-Read it **bottom-up**: `diagnose` is three lines and tells you what the other four are for.
+Read it **bottom-up**: `diagnose` is a dozen lines and tells you what the others are for.
 
 | # | Function | Line | What to take away |
 |---:|---|---|---|
-| 76 | `_get_client` | [llm_service.py:34](../../app/services/llm_service.py#L34) | The single Anthropic client the process uses: built on the first diagnosis behind a double-checked lock, reused by every one after it. A client per request meant a connection pool per request ([../performance/PERFORMANCE_BUGS.md § PERF-14](../performance/PERFORMANCE_BUGS.md#perf-14)). `import anthropic` sits *inside* it, so the dependency stays optional; the SDK never reads `.env`, so the key is handed over explicitly; and both branches carry `TIMEOUT_SECONDS` / `MAX_RETRIES` — without them the SDK waits up to 30 minutes. |
-| 77 | `_build_context` | [llm_service.py:61](../../app/services/llm_service.py#L61) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
-| 78 | `_llm_diagnosis` | [llm_service.py:81](../../app/services/llm_service.py#L81) | The Anthropic SDK call itself, now three lines shorter: it asks `_get_client` for the client and sends the request. One comment worth reading — adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`, a timeout included, and so does the one `_get_client` raises on a machine with no credential. |
-| 79 | `_rule_based_diagnosis` | [llm_service.py:117](../../app/services/llm_service.py#L117) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
-| 80 | `diagnose` | [llm_service.py:147](../../app/services/llm_service.py#L147) | Try the LLM, fall back, return `(text, source)` — `source` is surfaced in the response so a caller can always tell which path ran. |
+| 76 | `_get_client` | [llm_service.py:46](../../app/services/llm_service.py#L46) | The single Anthropic client the process uses: built on the first diagnosis behind a double-checked lock, reused by every one after it. A client per request meant a connection pool per request ([../performance/PERFORMANCE_BUGS.md § PERF-14](../performance/PERFORMANCE_BUGS.md#perf-14)). `import anthropic` sits *inside* it, so the dependency stays optional; the SDK never reads `.env`, so the key is handed over explicitly; and both branches carry `TIMEOUT_SECONDS` / `MAX_RETRIES` — without them the SDK waits up to 30 minutes. |
+| 77 | `_build_context` | [llm_service.py:76](../../app/services/llm_service.py#L76) | Formats instance fields plus recent alerts into plain text — shared by the prompt, and easy to test. |
+| 77b | `_user_message`, `_cache_key` | [llm_service.py:96](../../app/services/llm_service.py#L96) | The exact user turn, and a SHA-256 over model + `SYSTEM_PROMPT` + that turn. Anything the model would see differently is a different key, so nothing ever invalidates an entry — an outdated one is never asked for again. |
+| 78 | `_llm_diagnosis` | [llm_service.py:114](../../app/services/llm_service.py#L114) | The Anthropic SDK call itself, now three lines shorter: it asks `_get_client` for the client and sends the request. One comment worth reading — adaptive thinking spends the same token budget, so `max_tokens` is generous. **Any** exception returns `None`, a timeout included, and so does the one `_get_client` raises on a machine with no credential. |
+| 79 | `_rule_based_diagnosis` | [llm_service.py:134](../../app/services/llm_service.py#L134) | A deterministic fallback in the same three-section format, built from CPU level, alert history, instance type and region. |
+| 80 | `diagnose` | [llm_service.py:164](../../app/services/llm_service.py#L164) | Cached model answer if there is one; otherwise try the LLM and cache what it returns; otherwise fall back — the fallback is never cached. Returns `(text, source)`; `source` is surfaced in the response so a caller can always tell which path ran. |
 
 **The design point:** this endpoint has no failure mode. No API key, no network, a bad
 response — all produce a useful answer with `source: "rule-based"`, which is why the demo
@@ -448,12 +449,12 @@ Exact figures: [../demo/SEED_DATA.md](../demo/SEED_DATA.md).
 ### 9.2 `tests/`
 
 [tests/conftest.py](../../tests/conftest.py) first — seven fixtures, and they explain how
-129 tests stay isolated and fast:
+137 tests stay isolated and fast:
 
 | # | Fixture | Line | What to take away |
 |---:|---|---|---|
 | 81 | `memoised_seed_hashing` | [conftest.py:22](../../tests/conftest.py#L22) | Session-scoped: memoises `hash_password` *for the seed only*, because 260,000 PBKDF2 iterations × 3 passwords × every test dominated the runtime. `verify_password` still does real work on every login. |
-| 81a | `clock` | [conftest.py:52](../../tests/conftest.py#L52) | A `FakeClock` the test advances by hand, so TTLs pass without sleeping. |
+| 81a | `clock` | [conftest.py:52](../../tests/conftest.py#L52) | A `FakeClock` the test advances by hand, so cache TTLs pass without sleeping. |
 | 81b | `store` | [conftest.py:57](../../tests/conftest.py#L57) | Autouse: a fresh `MemoryStore` on that clock for every test (stop 27a), so no test inherits another's stored values — and a developer's `REDIS_URL` never reaches the suite. |
 | 81c | `redis_server` | [conftest.py:71](../../tests/conftest.py#L71) | Swaps in `RedisStore` over `fakeredis`. `server.connected = False` simulates an outage. |
 | 82 | `api` | [conftest.py:86](../../tests/conftest.py#L86) | A fresh in-memory SQLite database per test, held open by `StaticPool`, seeded, and injected by overriding `get_db` (stop 10). Note the `engine.dispose()` in `finally`. |
@@ -469,7 +470,7 @@ Then read the suites in the same order as this document:
 | [tests/test_member_c.py](../../tests/test_member_c.py) | status changes and monitoring scope | 4, 5 |
 | [tests/test_alerts.py](../../tests/test_alerts.py) | filters, resolve, deduplication | 5, 6 |
 | [tests/test_clients.py](../../tests/test_clients.py) | scoping, cost, forecast, SLA | 7 |
-| [tests/test_diagnosis.py](../../tests/test_diagnosis.py) | fallback path, `source` field | 8 |
+| [tests/test_diagnosis.py](../../tests/test_diagnosis.py) | fallback path, `source` field, answer cache | 8 |
 
 The tests are the executable version of the business rules: when a document and the code
 disagree, [tests/](../../tests/) is the tie-breaker. What each suite asserts:

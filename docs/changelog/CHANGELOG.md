@@ -16,6 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
+| [2026-09-15](#2026-09-15--a-diagnosis-cache-and-optional-redis) | Diagnosis cache, optional Redis | A model diagnosis is reused while the instance is unchanged; short-lived state can live in Redis |
 | [2026-09-05](#2026-09-05--perf-14-fixed-one-anthropic-client-for-the-process) | PERF-14 fixed | The diagnosis endpoint stops building an HTTP client, and a connection pool, per request |
 | [2026-09-05](#2026-09-05--perf-12-fixed-the-cost-forecast-counts-in-sql) | PERF-12 fixed | The forecast counts running instances with a `GROUP BY` instead of loading every one of them |
 | [2026-09-05](#2026-09-05--perf-11-fixed-the-single-object-guard-stops-loading-the-client) | PERF-11 fixed | A single-object endpoint no longer fetches a whole `clients` row to compare one integer |
@@ -46,6 +47,43 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 | [2026-08-01](#2026-08-01--client-validation-and-cascade-delete) | Client validation + cascade delete | `400` on a non-manager `managerId` |
 | [2026-07-31](#2026-07-31--monitoring-module-completed) | Monitoring module completed | Idempotent status update, deterministic ordering |
 | [2026-07-11](#2026-07-11--initial-codebase) | Initial codebase | 19 endpoints, 5 tables, MVC layout |
+
+---
+
+## 2026-09-15 — A diagnosis cache, and optional Redis
+
+The first feature built on a new short-lived store, which keeps state in process memory by
+default or in Redis when `REDIS_URL` is set. 137 tests pass — the 129 that existed,
+unchanged, plus 8 new ones.
+
+### Added
+
+- **A diagnosis answer cache.** `GET /api/instances/{id}/diagnosis` reuses a model answer for
+  30 minutes while the instance and its recent alerts are unchanged, keyed on a hash of the
+  exact request, so a status change or a new or resolved alert is always a fresh call. The
+  response is unchanged; the rule-based fallback is never cached. `DIAGNOSIS_CACHE_TTL_SECONDS`
+  sets the lifetime, `0` turns it off
+  ([../design/LLM_FEATURE.md § 4.7](../design/LLM_FEATURE.md#47-the-answer-cache)).
+- **Optional Redis.** `app/core/store.py` keeps short-lived state in process memory, or in
+  Redis when `REDIS_URL` is set — needed for the cache to be shared across workers. Redis
+  failures fail open: every diagnosis then calls the provider, as before. New dependency
+  `redis`; `fakeredis` for the tests
+  ([../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state)).
+- **8 functional tests** in `test_diagnosis.py`, recorded as TC-DIAG-10 … 16, including the
+  Redis backend and a Redis outage.
+
+### Documentation
+
+- [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) — § 4.7 on the cache, which replaces
+  the "no caching" limitation; [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — the
+  short-lived store.
+- [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) — new § 6 on `REDIS_URL`,
+  later sections renumbered.
+- [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../requirements/FRS.md](../requirements/FRS.md)
+  (F-DIAG-01 processing), [../manual/USER_MANUAL.md](../manual/USER_MANUAL.md) § 10.
+- [../testing/](../testing/README.md), [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md)
+  (stops 27a–27b, 77b, 81a–81c), and the counts in [../../README.md](../../README.md) and
+  [../../CLAUDE.md](../../CLAUDE.md) — 129 → 137 tests.
 
 ---
 

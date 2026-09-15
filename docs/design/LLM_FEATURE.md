@@ -10,6 +10,7 @@ Instance Monitoring System: **automatic incident diagnosis for a cloud instance*
 | Model | `claude-opus-4-8` |
 | Request limits | 30 s timeout, 1 retry — 60 s worst case |
 | SDK client | One per process, built on first use (§ 4.6) |
+| Answer cache | Model answers reused for 30 min while the request is unchanged (§ 4.7) |
 | Service module | [app/services/llm_service.py](../../app/services/llm_service.py) |
 | Controller | [app/controllers/instance_controller.py:98-135](../../app/controllers/instance_controller.py#L98-L135) |
 | Response DTO | `DiagnosisResponse` in [app/schemas/schemas.py:144-149](../../app/schemas/schemas.py#L144-L149) |
@@ -45,7 +46,10 @@ instance_controller.diagnose_instance()
         ▼
 llm_service.diagnose(instance, alerts) -> (text, source)
         │
+        ├── cache hit for _cache_key(instance, alerts)          → source = "llm"   (§ 4.7)
+        │
         ├── _llm_diagnosis()      → Anthropic Messages API      → source = "llm"
+        │        └── on success: store the answer under that key
         │        └── on any exception (no key, network, quota) ─┐
         │                                                       ▼
         └── _rule_based_diagnosis() → deterministic template  → source = "rule-based"
@@ -71,6 +75,9 @@ DiagnosisResponse (JSON)
 - **Bounded wait, and nothing held during it.** The provider call is capped at 30
   seconds per attempt with a single retry, and the handler returns its database
   connection to the pool before making the call. See § 4.5.
+- **Ask once per unchanged question.** A model answer is cached under a hash of the exact
+  request, so reopening the same incident costs neither a provider call nor its latency,
+  and any change to the instance or its alerts is a new question. See § 4.7.
 
 ### 2.1 The two execution paths
 
@@ -287,9 +294,15 @@ construction is never cached — see § 4.6.
 
 ```python
 def diagnose(instance, alerts) -> tuple[str, str]:
-    """Returns (diagnosis_text, source) where source is 'llm' or 'rule-based'."""
+    ttl = settings.DIAGNOSIS_CACHE_TTL_SECONDS
+    key = _cache_key(instance, alerts) if ttl > 0 else None
+    if key is not None and (cached := get_store().get(key)) is not None:
+        return cached, "llm"                                     # § 4.7
+
     text = _llm_diagnosis(instance, alerts)
     if text is not None:
+        if key is not None:
+            get_store().set(key, text, ttl=ttl)
         return text, "llm"
     return _rule_based_diagnosis(instance, alerts), "rule-based"
 ```
@@ -441,6 +454,48 @@ The client is deliberately **not** closed at shutdown. Its pool is released when
 process exits; closing it in the lifespan hook would be one line, and is only correct once
 nothing can call `diagnose` after shutdown has begun.
 
+### 4.7 The answer cache
+
+Opening the same incident card twice used to cost two provider calls, each up to a minute
+and each billed, for what is by construction the same question. `diagnose` now keeps a model
+answer for `DIAGNOSIS_CACHE_TTL_SECONDS` (default **1800**) and returns it while the question
+has not changed.
+
+**The key is the request, not a list of fields.**
+
+```python
+def _cache_key(instance, alerts) -> str:
+    request = "\x00".join((MODEL, SYSTEM_PROMPT, _user_message(instance, alerts)))
+    return f"diagnosis:{instance.id}:{hashlib.sha256(request.encode()).hexdigest()}"
+```
+
+`_user_message` is the exact text sent to the model (§ 3.3), so whatever the model would see
+differently lands on a different key: a status change, a CPU update, a new alert, an alert
+resolved, a model or prompt edit. Nothing ever has to invalidate an entry — an outdated one
+is simply never asked for again, and expires. A key built from chosen fields, such as
+`(instanceId, updatedAt, latest alert id)`, would miss a resolved alert, which changes
+`isResolved` and none of those three.
+
+| Property | Behaviour |
+|---|---|
+| What is stored | Model answers only. The rule-based text is instant to rebuild, and caching it would keep serving the fallback for 30 minutes after a key is configured |
+| What the caller sees | Nothing different — same schema, same `source: "llm"`. A cached answer is indistinguishable from a fresh one |
+| Authorization | Unchanged. The controller's scope check runs before `diagnose`, so a cached answer is only ever returned to a caller allowed to diagnose that instance |
+| Where it lives | The store `REDIS_URL` selects ([../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state)) — process memory by default, shared across workers with Redis |
+| Redis unreachable | Every read misses and every write is dropped: each diagnosis calls the provider, exactly as before this cache existed |
+| Disabling it | `DIAGNOSIS_CACHE_TTL_SECONDS=0` — no key is computed, nothing is read or stored |
+
+**Why 30 minutes, not longer.** Wording varies between model calls (§ 2.1), but the
+diagnosis of an unchanged instance does not go stale by itself. The limit is there so an
+operator who changes something the prompt does *not* describe — a deployment rolled back,
+a disk cleared — gets a fresh read within the half hour, and so a prompt change reaches
+every instance within one cache lifetime.
+
+**Not done: a lock against concurrent misses.** Two requests for the same uncached instance
+arriving together both call the provider, and the second answer overwrites the first. That
+costs one redundant call in a rare case; preventing it needs a lock held across a
+network call of up to a minute, which is a worse failure mode than the call it saves.
+
 ---
 
 ## 5. Output Format
@@ -542,7 +597,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 `ANTHROPIC_API_KEY` is declared in `Settings` ([app/config.py:14](../../app/config.py#L14))
 with an empty default, so a missing key is a supported configuration rather than a
-startup failure. `CPU_WARNING_THRESHOLD` (default `80.0`) is read by the rule-based
+startup failure. `DIAGNOSIS_CACHE_TTL_SECONDS` (default `1800`, `0` to disable) sets how
+long a model answer is reused (§ 4.7), and `REDIS_URL` decides whether that cache is shared
+between processes. `CPU_WARNING_THRESHOLD` (default `80.0`) is read by the rule-based
 fallback so its causes stay consistent with the monitoring rules used elsewhere.
 
 ---
@@ -556,6 +613,8 @@ fallback so its causes stay consistent with the monitoring rules used elsewhere.
 | Invalid credentials | Wrong key | `200`, `source: "rule-based"` (auth error caught and logged) |
 | Unauthorized | `CLIENT_MANAGER` token for another client's instance | `403` |
 | Unknown instance | `id` not in DB | `404` |
+| Repeat, unchanged | Same call twice, nothing changed between them | Second answer identical, returned without a provider call |
+| Repeat, changed | Run `GET /api/monitor/errors` (records an alert) between the two calls | Second call reaches the provider |
 
 ---
 
@@ -569,9 +628,9 @@ fallback so its causes stay consistent with the monitoring rules used elsewhere.
   If the UI needs guaranteed fields, switch to structured outputs
   (`output_config.format` with a JSON schema) and return `causes[]`, `actions[]`,
   `prevention[]` as arrays instead of a text blob.
-- **No caching.** Repeated calls for the same unchanged instance re-invoke the model.
-  Caching the result keyed on `(instanceId, updatedAt, latest alert id)` would remove
-  redundant calls.
+- **A cached answer is not marked as cached.** The response has no field saying whether
+  the provider was called. Adding one is a schema change, and nothing a client does today
+  depends on the difference.
 - **Synchronous call.** The request blocks on the provider, occupying one of the 40
   threadpool workers for up to 60 seconds. Its database connection is released first
   (§ 4.5), so the pool is not affected, but the worker is still held; freeing that too
@@ -597,4 +656,5 @@ fallback so its causes stay consistent with the monitoring rules used elsewhere.
 | [../api/ERRORS.md](../api/ERRORS.md) | Why there is no `5xx` for provider failures |
 | [../business-rules/ALERTING.md](../business-rules/ALERTING.md) | How the alert history in the prompt is produced |
 | [../performance/PERFORMANCE_BUGS.md](../performance/PERFORMANCE_BUGS.md) | PERF-03, the request limits and the connection release of § 4.5; PERF-14, the one client of § 4.6 |
+| [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) | `DIAGNOSIS_CACHE_TTL_SECONDS` and `REDIS_URL`, the two settings behind § 4.7 |
 | [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) | Demo step for this endpoint |

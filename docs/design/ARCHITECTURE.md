@@ -130,7 +130,7 @@ are declared once.
 | [monitor_service.py](../../app/services/monitor_service.py) | Detection thresholds, alert auto-recording and dedup, the batched scan walk, the report |
 | [alert_service.py](../../app/services/alert_service.py) | Alert history filtering, resolution |
 | [client_service.py](../../app/services/client_service.py) | Client CRUD, cost, forecast, SLA |
-| [llm_service.py](../../app/services/llm_service.py) | Anthropic call, prompt construction, rule-based fallback |
+| [llm_service.py](../../app/services/llm_service.py) | Anthropic call, prompt construction, the answer cache, rule-based fallback |
 
 `llm_service` is fully isolated: the controller never imports `anthropic` and only
 receives `(text, source)`. Swapping provider or prompt touches nothing else. See
@@ -234,6 +234,7 @@ runs with no configuration at all.
 | `DATABASE_URL` | `sqlite:///./monitoring.db` | Engine |
 | `ANTHROPIC_API_KEY` | `""` | LLM path; empty is a supported configuration |
 | `REDIS_URL` / `REDIS_KEY_PREFIX` | `""` / `techvalley:` | `get_store()` — empty selects the in-memory store |
+| `DIAGNOSIS_CACHE_TTL_SECONDS` | `1800` | Diagnosis answer cache; `0` disables it |
 | `CPU_WARNING_THRESHOLD` | `80.0` | Warning detection |
 | `LONG_STOPPED_HOURS` | `48` | Long-stopped detection |
 | `PRICE_SMALL/MEDIUM/LARGE` | `50` / `120` / `250` | Unit pricing |

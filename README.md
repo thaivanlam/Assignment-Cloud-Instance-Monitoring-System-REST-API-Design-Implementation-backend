@@ -5,7 +5,7 @@
 **A REST API that replaces the Excel spreadsheet 10 client companies were tracked in.**
 
 Instances, alerts, cost, SLA and an LLM-powered diagnosis endpoint — behind JWT auth,
-role scoping and 129 functional tests.
+role scoping and 137 functional tests.
 
 <br/>
 
@@ -17,7 +17,7 @@ role scoping and 129 functional tests.
 [![JWT](https://img.shields.io/badge/Auth-JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)](docs/api/AUTHENTICATION.md)
 [![SQLite](https://img.shields.io/badge/DB-SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white)](docs/design/ERD.md)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?style=flat-square&logo=anthropic&logoColor=white)](docs/design/LLM_FEATURE.md)
-[![Tests](https://img.shields.io/badge/tests-129%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
+[![Tests](https://img.shields.io/badge/tests-137%20passing-2EA043?style=flat-square&logo=pytest&logoColor=white)](docs/testing/FUNCTIONAL_TESTS.md)
 [![Endpoints](https://img.shields.io/badge/endpoints-19%20%2B%20health-44CC11?style=flat-square&logo=swagger&logoColor=white)](docs/api/ENDPOINTS.md)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
@@ -46,7 +46,7 @@ role scoping and 129 functional tests.
 | 📈 | **SLA reporting** | `PREMIUM 99.9%` / `STANDARD 99%` / `BASIC 95%`, with per-instance uptime detail |
 | 🤖 | **LLM diagnosis** | Claude explains why an instance is unhealthy — and falls back to a rule-based answer with no API key, so the demo never breaks |
 | 📚 | **Documented end to end** | Fifteen documentation folders: requirements (BRD/SRS/FRS/use cases), API reference, business rules, ERD, user manual, walkthrough, test cases, performance and security findings |
-| ✅ | **129 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
+| ✅ | **137 functional tests** | Driven over HTTP against a per-test in-memory database — no API key, no running server |
 
 ---
 
@@ -187,7 +187,7 @@ Each rule is documented in **[docs/business-rules/](docs/business-rules/README.m
 - 📈 **SLA** — PREMIUM 99.9% / STANDARD 99% / BASIC 95%, with a documented uptime
   approximation.
 - 🤖 **LLM diagnosis** — falls back to a rule-based answer with no API key, so the demo
-  never breaks.
+  never breaks; a model answer is reused for 30 minutes while the instance is unchanged.
 
 ---
 
@@ -208,7 +208,7 @@ Captured from Swagger UI against a freshly seeded database — all 29 in
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q          # 129 functional tests — no API key, no running server
+pytest -q          # 137 functional tests — no API key, no Redis, no running server
 ```
 
 The suite drives the API over HTTP against a per-test **in-memory** database seeded with

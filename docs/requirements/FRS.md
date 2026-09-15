@@ -785,7 +785,7 @@ Load the client (`404` / `403`), then return its instances ordered by `id`, pagi
 |---|---|
 | **Endpoint** | `GET /api/instances/{id}/diagnosis` |
 | **Realises** | FR-09, BR-16, BR-17 |
-| **Verified by** | `diagnosis_falls_back_to_a_rule_based_answer`, `diagnosis_survives_a_provider_failure`, `diagnosis_works_for_a_healthy_instance_too` |
+| **Verified by** | `diagnosis_falls_back_to_a_rule_based_answer`, `diagnosis_survives_a_provider_failure`, `diagnosis_works_for_a_healthy_instance_too`, `an_unchanged_instance_reuses_the_model_answer`, `a_changed_instance_is_diagnosed_again` |
 
 **Processing**
 
@@ -793,11 +793,16 @@ Load the client (`404` / `403`), then return its instances ordered by `id`, pagi
 2. Load its **10 most recent alerts**.
 3. Release the database connection back to the pool *before* calling the provider, so a
    diagnosis in flight occupies none.
-4. If an API key is configured, call the model with the instance metadata and those
-   alerts, bounded at a 30-second timeout with at most one retry.
-5. On any provider condition — no key, timeout, transport error, exception, empty answer —
-   fall back to a deterministic rule-based write-up built from the same inputs.
-6. Return the text with `source` set to `"llm"` or `"rule-based"`.
+4. If a model answer for exactly this request — same model, prompt, instance fields and
+   alerts — was cached within `DIAGNOSIS_CACHE_TTL_SECONDS` (1800), return it with
+   `source` = `"llm"` and skip the call.
+5. Otherwise, if an API key is configured, call the model with the instance metadata and
+   those alerts, bounded at a 30-second timeout with at most one retry, and cache a
+   successful answer.
+6. On any provider condition — no key, timeout, transport error, exception, empty answer —
+   fall back to a deterministic rule-based write-up built from the same inputs. It is not
+   cached.
+7. Return the text with `source` set to `"llm"` or `"rule-based"`.
 
 **Output** `200`
 

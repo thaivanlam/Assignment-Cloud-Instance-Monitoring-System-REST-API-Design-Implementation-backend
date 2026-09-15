@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     REDIS_URL: str = ""
     REDIS_KEY_PREFIX: str = "techvalley:"
 
+    # How long an LLM diagnosis is reused for an unchanged instance; 0 disables the cache
+    DIAGNOSIS_CACHE_TTL_SECONDS: int = 1800
+
     # Business rules
     CPU_WARNING_THRESHOLD: float = 80.0
     LONG_STOPPED_HOURS: int = 48
