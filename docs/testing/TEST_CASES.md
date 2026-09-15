@@ -4,7 +4,7 @@
 |---|---|
 | System | TechValley Cloud Instance Monitoring System |
 | Document | Test Case specification |
-| Status | Baseline — matches the 137-case automated suite |
+| Status | Baseline — matches the 149-case automated suite |
 | Last reviewed | 2026-09-15 |
 
 The test scenarios, conditions and data used to check the system for defects — each with
@@ -122,14 +122,23 @@ Column meanings: **Steps / data** is the call to make; **Expected** is the exact
 | ID | Pri | Precondition | Steps / data | Expected | Automated by |
 |---|:--:|---|---|---|---|
 | **TC-AUTH-01** | P2 | Server running | `GET /` with no token | `200`, body `{"status":"ok","service":…,"docs":"/docs"}` | `health_check_is_public` |
-| **TC-AUTH-02** | P1 | — | `POST /api/auth/login` `{"email":"admin@techvalley.vn","password":"admin123!"}` | `200`; `tokenType` = `bearer`; `role` = `ADMIN`; `name` = `TechValley Admin`; the JWT carries `sub`, `email`, `role`, `exp`; the token authorises a protected call | `login_returns_a_usable_token_with_role_and_name` |
+| **TC-AUTH-02** | P1 | — | `POST /api/auth/login` `{"email":"admin@techvalley.vn","password":"admin123!"}` | `200`; `tokenType` = `bearer`; `role` = `ADMIN`; `name` = `TechValley Admin`; the JWT carries `sub`, `email`, `role`, `iat`, `exp`, `jti`; the token authorises a protected call | `login_returns_a_usable_token_with_role_and_name` |
 | **TC-AUTH-03** | P2 | — | Log in as `lam@techvalley.vn` | `200`; `role` = `CLIENT_MANAGER`, `name` = `Thai Van Lam` — the response reflects the account, not a default | `login_issues_the_manager_role_for_a_manager_account` |
 | **TC-AUTH-04** | P1 | — | (a) right email + wrong password; (b) unknown email + any password | Both `401` with **identical** body `{"detail":"Invalid email or password"}` — no account enumeration | `login_rejects_bad_credentials_without_revealing_which_part_failed` |
 | **TC-AUTH-05** | P3 | — | `POST /api/auth/login` with `email` = `"not-an-email"` | `422`, before any database lookup | `login_rejects_a_malformed_email` |
-| **TC-AUTH-06** | P1 | — | Call one endpoint per router with **no** `Authorization` header | Every one `401` `Not authenticated. Provide a Bearer token.` | `protected_endpoints_reject_a_missing_token` |
-| **TC-AUTH-07** | P1 | — | Send (a) `Bearer garbage`; (b) a token signed with a different secret | Both `401 Invalid token` | `invalid_tokens_are_rejected` |
+| **TC-AUTH-06** | P1 | — | Call one endpoint per router, and `POST /api/auth/logout`, with **no** `Authorization` header | Every one `401` `Not authenticated. Provide a Bearer token.` | `protected_endpoints_reject_a_missing_token` |
+| **TC-AUTH-07** | P1 | — | Send (a) `Bearer garbage`; (b) a token signed with a different secret; (c) a correctly signed token with `exp` but no `jti` | All three `401 Invalid token` | `invalid_tokens_are_rejected` |
 | **TC-AUTH-08** | P1 | — | Send a well-formed token whose `exp` is in the past | `401 Token has expired` | `expired_token_is_rejected` |
 | **TC-AUTH-09** | P1 | A valid token for manager1 | Delete the member row, then call any endpoint with that token | `401 Member no longer exists` — the member is re-read on every request | `token_for_a_member_that_no_longer_exists_is_rejected` |
+| **TC-AUTH-10** | P1 | Fresh server | 10 × login as `admin@techvalley.vn` with a wrong password (mixing `Admin@…`), then once with `admin123!` | The 10 answer `401`; the 11th `429` `Too many failed login attempts. Try again later.` with `Retry-After` between 1 and 900 — the right password is refused, and not checked | `login_is_refused_once_an_account_reaches_its_failure_limit` |
+| **TC-AUTH-11** | P2 | TC-AUTH-10 just ran | Wait out `Retry-After`, then log in with `admin123!` | `200` | `the_account_limit_lifts_when_its_window_ends` |
+| **TC-AUTH-12** | P2 | Fresh server | 9 wrong passwords, 1 right, then 10 wrong | The right one `200`; the last 10 all `401` — a success resets the account counter | `a_successful_login_clears_the_account_counter` |
+| **TC-AUTH-13** | P2 | `LOGIN_MAX_FAILURES_PER_IP=3` | Wrong logins for four **different** emails from one address; separately, six correct logins | The fourth wrong one `429`; the six correct ones all `200` | `one_address_is_limited_across_many_accounts`, `successful_logins_do_not_use_up_the_address_limit` |
+| **TC-AUTH-14** | P1 | A token from login | `POST /api/auth/logout` with it, then `GET /api/clients` and a second logout with it | `204` with no body; then both `401 Token has been revoked` | `logout_revokes_the_token_it_was_called_with` |
+| **TC-AUTH-15** | P2 | Two tokens for one account | Log out with the first | The first `401`; the second still `200` | `logout_leaves_the_members_other_sessions_valid` |
+| **TC-AUTH-16** | P3 | A logged-out token | Inspect the store after the token's lifetime has passed | The denylist entry is gone | `a_revocation_is_kept_only_as_long_as_the_token_lives` |
+| **TC-AUTH-17** | P2 | `REDIS_URL` set | Repeat TC-AUTH-10 and TC-AUTH-14; list the keys | Same results; keys are prefixed `techvalley:` and each has a TTL | `rate_limit_and_revocation_share_state_through_redis` |
+| **TC-AUTH-18** | P2 | `REDIS_URL` set, Redis then stopped | 11 wrong logins, a right one, a logout, a call with the logged-out token | All answer — `401`×11, `200`, `204`, `200`; no `429` and no `5xx`; `Redis … failed` warnings in the log | `a_redis_outage_fails_open` |
 
 ### 4.2 Instances — TC-INST
 
@@ -281,7 +290,7 @@ database is freshly seeded.
 
 1. Every P1 case passes. A P1 failure is a release blocker.
 2. Every P2 case passes, or the failure is recorded as a known defect with a decision.
-3. `pytest -q` reports **137 passed**.
+3. `pytest -q` reports **149 passed**.
 4. Any case whose expected value the change moved has been updated **in the same commit**,
    along with [../demo/SEED_DATA.md](../demo/SEED_DATA.md) and
    [../demo/WALKTHROUGH.md](../demo/WALKTHROUGH.md) if the numbers there moved
@@ -323,8 +332,8 @@ Stated so no reader takes a green run as broader assurance than it is.
 | Token forgery, disclosure, injection | Reviewed separately — [SECURITY_BUGS](../security/SECURITY_BUGS.md). **A green suite verifies none of the security NFRs** |
 | The real Anthropic API | Needs credentials and returns non-deterministic text — the provider is the only stub in the suite |
 | `cost_snapshots` | Seeded but read by no endpoint, so there is nothing observable to assert |
-| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours; cache TTLs are passed with a fake clock |
-| A real Redis, several workers | The Redis backend runs against `fakeredis` in-process, one process — [FUNCTIONAL_TESTS § 7](FUNCTIONAL_TESTS.md#7-what-is-deliberately-not-covered) |
+| Token expiry over real elapsed time | Simulated by signing a token with a past `exp` rather than waiting two hours; windows and TTLs are passed with a fake clock |
+| A real Redis, several workers, concurrent logins | The Redis backend runs against `fakeredis` in-process, one process, sequential requests — [FUNCTIONAL_TESTS § 7](FUNCTIONAL_TESTS.md#7-what-is-deliberately-not-covered) |
 
 ---
 
@@ -335,7 +344,7 @@ Requirement → the cases that verify it. Business-level traceability continues 
 
 | Requirement | Function | Test cases |
 |---|---|---|
-| FR-01 Authentication | F-AUTH-01, F-AUTH-02, F-AUTH-03 | TC-AUTH-01 … TC-AUTH-09 |
+| FR-01 Authentication | F-AUTH-01, F-AUTH-02, F-AUTH-03, F-AUTH-04 | TC-AUTH-01 … TC-AUTH-18 |
 | FR-02 Client management | F-CLNT-01, F-CLNT-02, F-CLNT-03 | TC-CLNT-01 … TC-CLNT-10 |
 | FR-03 Instance register | F-INST-01, F-INST-02, F-INST-03 | TC-INST-01 … TC-INST-14 |
 | FR-04 Instance lifecycle | F-INST-04, F-INST-05 | TC-INST-15 … TC-INST-23 |
@@ -345,12 +354,14 @@ Requirement → the cases that verify it. Business-level traceability continues 
 | FR-08 SLA reporting | F-CLNT-06 | TC-CLNT-18 … TC-CLNT-22 |
 | FR-09 Diagnosis | F-DIAG-01 | TC-DIAG-01 … TC-DIAG-16 |
 | FR-10 Cross-cutting | F-X-01, F-X-02, F-X-03 | TC-X-01 … TC-X-09 |
-| NFR-REL-01 Provider never fails a request | F-DIAG-01 | TC-DIAG-01, TC-DIAG-04, TC-DIAG-16 |
+| NFR-REL-01 Provider never fails a request | F-DIAG-01 | TC-DIAG-01, TC-DIAG-04, TC-DIAG-16, TC-AUTH-18 |
 | NFR-REL-04 Repeated writes are no-ops | F-INST-04, F-ALRT-02 | TC-INST-17, TC-ALRT-14 |
 | NFR-REL-05 No orphaned alerts | F-INST-05 | TC-INST-21 |
 | NFR-REL-06 Pages partition exactly | F-X-01 | TC-INST-11, TC-ALRT-10, TC-MON-08 |
 | NFR-SEC-02 Authorization per request | F-X-02 | TC-AUTH-09, TC-X-03, TC-X-04, TC-X-08, TC-X-09 |
 | NFR-SEC-03 No account enumeration | F-AUTH-01 | TC-AUTH-04 |
+| NFR-SEC-07 Token revocable before expiry | F-AUTH-04 | TC-AUTH-14, TC-AUTH-15, TC-AUTH-16 |
+| NFR-SEC-09 Failed logins are limited | F-AUTH-01 | TC-AUTH-10 … TC-AUTH-13 |
 | NFR-USE-04 Over-range page is empty | F-X-01 | TC-INST-12, TC-ALRT-11 |
 
 Requirements marked **D** in [SRS § 5](../requirements/SRS.md#5-non-functional-requirements)

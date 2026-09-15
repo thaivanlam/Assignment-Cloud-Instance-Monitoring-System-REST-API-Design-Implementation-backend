@@ -17,7 +17,7 @@ MVC layout under `app/`:
 
 ```bash
 uvicorn app.main:app --reload   # run (Swagger at /docs)
-pytest -q                       # tests — 137 functional tests, no API key or Redis needed
+pytest -q                       # tests — 149 functional tests, no API key or Redis needed
 ```
 
 `monitoring.db` is created and seeded automatically on startup by `app/seed.py`.
@@ -47,7 +47,7 @@ These apply to every change in this repository, for every contributor.
    change alters a route, a field, a status code, an error body or the seed numbers,
    re-capture the affected PNGs in the *same commit*:
    `python scripts/capture_swagger_ui.py --only <scenario>` against a running server
-   (`--only` is a substring filter; omit it to rebuild all 29 from a deleted
+   (`--only` is a substring filter; omit it to rebuild all 31 from a deleted
    `monitoring.db`). Adding or removing a capture also updates
    [docs/screenshots/README.md](docs/screenshots/README.md).
 

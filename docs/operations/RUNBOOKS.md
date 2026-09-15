@@ -27,7 +27,7 @@ git log --oneline -3                    # 4 · what changed recently?
 | Answer to #1 | Go to |
 |---|---|
 | Connection refused / nothing listening | [R1](#r1--the-server-will-not-start-modulenotfounderror)–[R5](#r5--modulenotfounderror-no-module-named-psycopg2) — it never started, or it crashed at startup |
-| `{"status":"ok",...}` but calls fail | [R6](#r6--every-request-returns-401-after-a-restart)–[R9](#r9--500s-under-load-queuepool-timeout) |
+| `{"status":"ok",...}` but calls fail | [R6](#r6--every-request-returns-401-after-a-restart)–[R9](#r9--500s-under-load-queuepool-timeout), [R16](#r16--login-answers-429) |
 | Answers, but slowly | [R9](#r9--500s-under-load-queuepool-timeout), [R10](#r10--the-diagnosis-endpoint-is-slow), [R13](#r13--list-endpoints-are-slow) |
 | Answers, but with the wrong data | [R7](#r7--the-demo-credentials-are-rejected), [R12](#r12--data-resets-or-resolved-alerts-come-back) |
 
@@ -52,6 +52,8 @@ git log --oneline -3                    # 4 · what changed recently?
 | List endpoints got slow as data grew | [R13](#r13--list-endpoints-are-slow) |
 | Need a clean database | [R14](#r14--reset-to-a-clean-seeded-database) |
 | `InsecureKeyLengthWarning` on startup | [R15](#r15--insecurekeylengthwarning-on-startup) |
+| `429 Too many failed login attempts` | [R16](#r16--login-answers-429) |
+| A logged-out token still works; the login limit does not hold; `Redis … failed` in the log | [R17](#r17--logout-or-the-login-limit-does-not-hold) |
 
 ---
 
@@ -217,7 +219,9 @@ process ([CONFIGURATION.md § 3](CONFIGURATION.md#3-secret_key)). Clients then l
 more; there is no refresh token, so a rotation is always a forced re-login.
 
 If the key did *not* change, the token has simply expired — the default lifetime is 120
-minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`).
+minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`) — or it predates the `jti` claim: tokens issued
+before revocation was added answer `401 Invalid token` after the upgrade, once. A
+`401 Token has been revoked` is a logout, not a restart.
 
 **Verify.** Log in again, call `GET /api/instances?size=1` with the new token, and restart
 the service once more: the same token must still work afterwards.
@@ -481,6 +485,83 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 ---
 
+## R16 · Login answers `429`
+
+**Symptom.** `POST /api/auth/login` returns
+`429 {"detail": "Too many failed login attempts. Try again later."}` — possibly with the
+right password — and a `Retry-After` header.
+
+**Cause.** The login rate limit
+([../api/AUTHENTICATION.md § 2](../api/AUTHENTICATION.md#2-login-rate-limit)). Either the
+account has had `LOGIN_MAX_FAILURES_PER_ACCOUNT` (10) failures, or the client address
+`LOGIN_MAX_FAILURES_PER_IP` (50), within `LOGIN_WINDOW_SECONDS` (15 minutes). The log says
+which accounts and addresses were failing:
+
+```bash
+journalctl -u techvalley --since "20 min ago" | grep "Failed login"
+# WARNING:app.controllers.auth_controller:Failed login for admin@techvalley.vn from 10.0.0.7
+```
+
+| Pattern in the log | Meaning |
+|---|---|
+| One account, one address, a handful of lines | A user mistyping — wait out `Retry-After` |
+| One account, many addresses | Someone is guessing that account's password; the lockout is doing its job |
+| Many accounts, **one** address that is your proxy | uvicorn is not reading forwarded headers, so every user shares the proxy's address counter — see Fix |
+| Many accounts, one outside address | Password spraying from one source |
+
+**Fix**
+
+- **Wait.** The window is fixed at the first counted attempt; `Retry-After` is the seconds
+  left. Nothing needs resetting.
+- **Lift one lockout early**, with Redis: `redis-cli del techvalley:login:account:<email>`
+  (or `login:ip:<address>`). With the default in-memory store the only way is a restart,
+  which also forgets every logout
+  ([CONFIGURATION.md § 6](CONFIGURATION.md#6-redis_url--shared-state)).
+- **Behind a proxy**, start uvicorn with `--proxy-headers --forwarded-allow-ips <proxy ip>`
+  ([DEPLOYMENT.md § 5](DEPLOYMENT.md#5-launch--a-single-server)).
+- **Many real users behind one NAT** hitting the address limit: raise
+  `LOGIN_MAX_FAILURES_PER_IP` and restart. Successful logins do not use it up, so this only
+  happens when many of them are failing.
+
+**Verify.** After the window, or the key deletion, the login returns `200`.
+
+---
+
+## R17 · Logout or the login limit does not hold
+
+**Symptom.** One of:
+
+- a token that was logged out (`204`) still works on some requests and not others;
+- more than 10 failed logins for one account go through before a `429`;
+- a diagnosis that should be cached reaches the provider again;
+- `WARNING:app.core.store:Redis GET failed, continuing without it: …` in the log.
+
+**Cause.** The shared state is not shared.
+
+| Situation | Why |
+|---|---|
+| `REDIS_URL` empty and `--workers` > 1, or several servers | Each process keeps its own counters, denylist and cache. A logout reaches only the process that served it |
+| `REDIS_URL` empty on serverless | Each instance has its own memory, and a cold start empties it |
+| `Redis … failed` warnings | Redis is unreachable or slower than 0.5 s. The store **fails open**: no limit, no revocation, no cache, but every request still answers |
+
+**Fix**
+
+```bash
+python -c "from app.config import settings; print(repr(settings.REDIS_URL))"   # '' = in-memory
+redis-cli -u "$REDIS_URL" ping                                                # expect PONG
+```
+
+- Empty with more than one process → set `REDIS_URL` to a Redis every process can reach,
+  and restart them all ([CONFIGURATION.md § 6](CONFIGURATION.md#6-redis_url--shared-state)).
+  Or run one worker.
+- `ping` fails → bring Redis back; the protection returns with it and nothing needs a
+  restart. Tokens revoked before the outage are still revoked unless Redis lost its data.
+
+**Verify.** Log in, log out, then call `GET /api/instances?size=1` with that token several
+times: every call answers `401 Token has been revoked`.
+
+---
+
 ## Reading the logs
 
 The application logs to stdout and stderr through uvicorn's configuration and writes no
@@ -493,6 +574,8 @@ file of its own. Under systemd: `journalctl -u techvalley -f`; in a container:
 | `INFO: 127.0.0.1:xxxxx - "GET /api/instances HTTP/1.1" 200 OK` | Normal access log, one line per request |
 | `WARNING:app.services.llm_service:LLM diagnosis unavailable…` | The fallback answered ([R11](#r11--diagnosis-answers-rule-based-when-a-key-is-configured)) |
 | `WARNING:app.services.llm_service:LLM diagnosis hit the max_tokens cap` | The answer may be truncated; the response is still returned |
+| `WARNING:app.controllers.auth_controller:Failed login for <email> from <address>` | A wrong password or unknown account; many in a row lead to `429` ([R16](#r16--login-answers-429)) |
+| `WARNING:app.core.store:Redis <command> failed, continuing without it` | Redis unreachable; rate limit, revocation and cache are off until it returns ([R17](#r17--logout-or-the-login-limit-does-not-hold)) |
 | `sqlalchemy.exc.*` in a traceback | Database-level failure — [R3](#r3--unable-to-open-database-file), [R8](#r8--database-is-locked), [R9](#r9--500s-under-load-queuepool-timeout) |
 
 `uvicorn --log-level debug` adds detail for a reproduction. Two things worth knowing when
@@ -507,7 +590,7 @@ unexpected; and no request id is logged, so correlate by timestamp and path.
 ```bash
 git rev-parse --short HEAD                 # the exact code running
 python -V                                  # interpreter
-pip freeze | grep -Ei "fastapi|uvicorn|sqlalchemy|pydantic|pyjwt|anthropic"
+pip freeze | grep -Ei "fastapi|uvicorn|sqlalchemy|pydantic|pyjwt|anthropic|redis"
 curl -s http://127.0.0.1:8000/             # health
 ls -l monitoring.db*                       # database presence and size
 journalctl -u techvalley -n 200            # the log around the failure

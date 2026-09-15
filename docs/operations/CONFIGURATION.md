@@ -48,8 +48,11 @@ that the file with the secrets in it never has to be.
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `120` | Token lifetime | Shorter for a shared demo, longer for a long walkthrough |
 | `DATABASE_URL` | `sqlite:///./monitoring.db` | Which database is opened, and which pool — § 5 | Moving off the local file |
 | `ANTHROPIC_API_KEY` | `""` (empty) | The LLM diagnosis path — § 4 | Enabling real diagnoses |
-| `REDIS_URL` | `""` (empty) | Where short-lived state lives — § 6 | Running more than one worker process or server |
+| `REDIS_URL` | `""` (empty) | Where login counters, revoked tokens and cached diagnoses live — § 6 | Running more than one worker process or server |
 | `REDIS_KEY_PREFIX` | `techvalley:` | Prefix on every Redis key — § 6 | Sharing one Redis between deployments |
+| `LOGIN_MAX_FAILURES_PER_ACCOUNT` | `10` | Failed logins per account per window before `429` — § 6 | Tightening or relaxing the lockout |
+| `LOGIN_MAX_FAILURES_PER_IP` | `50` | Failed logins per client address per window before `429` — § 6 | Many users behind one address |
+| `LOGIN_WINDOW_SECONDS` | `900` | Length of the rate-limit window — § 6 | As above |
 | `DIAGNOSIS_CACHE_TTL_SECONDS` | `1800` | How long a model diagnosis is reused; `0` disables the cache — § 6 | Fresher or cheaper diagnoses |
 | `CPU_WARNING_THRESHOLD` | `80.0` | The CPU % above which a scan raises `CPU_HIGH` | § 7 |
 | `LONG_STOPPED_HOURS` | `48` | How long `STOPPED` counts as long-stopped | § 7 |
@@ -170,10 +173,12 @@ Two operational cautions:
 
 ## 6. `REDIS_URL` — shared state
 
-State that must outlive a request but not a restart — every value carrying a TTL — is kept
-in the store `REDIS_URL` selects ([../../app/core/store.py](../../app/core/store.py)). The
-diagnosis cache ([../design/LLM_FEATURE.md § 4.7](../design/LLM_FEATURE.md#47-the-answer-cache))
-keeps its answers there:
+Three features keep short-lived state outside the database: the login rate limit, the
+token denylist behind `POST /api/auth/logout`
+([../api/AUTHENTICATION.md §§ 2, 4](../api/AUTHENTICATION.md#2-login-rate-limit)), and the
+diagnosis cache ([../design/LLM_FEATURE.md § 4.7](../design/LLM_FEATURE.md#47-the-answer-cache)).
+`REDIS_URL` decides where that state lives
+([../../app/core/store.py](../../app/core/store.py)):
 
 ```bash
 REDIS_URL=                                   # default — process memory
@@ -187,19 +192,22 @@ REDIS_URL=rediss://:<password>@host:6380/0   # TLS, with a password — managed 
 | set | Redis, one key space for every process | `--workers N`, several servers, serverless instances |
 
 **Why one worker is fine without it, and more is not.** Every value is per process when the
-store is in memory: with four workers, each holds its own copy and none sees what another
-stored. None of that is visible as an error, which is why the setting matters.
+store is in memory. With four workers an account gets four times the failure allowance, a
+logout reaches only the worker that served it — the same token keeps working on the other
+three — and each worker caches its own diagnoses. None of that is visible as an error, which
+is why the setting matters.
 
 **Behaviour of the Redis store.**
 
 | Situation | What happens |
 |---|---|
 | Redis is down at startup | The app starts. redis-py connects on the first command, not at construction |
-| Redis is unreachable or slow | Each call gives up after 0.5 s and **fails open**: a read answers "nothing stored" and a write is dropped — each failure logs `Redis … failed, continuing without it` at `WARNING`. No request fails because of Redis |
-| Redis restarts empty | Everything stored is forgotten, as with a process restart on the in-memory store |
-| Several deployments share one Redis | Give each its own `REDIS_KEY_PREFIX`; otherwise they read each other's keys |
+| Redis is unreachable or slow | Each call gives up after 0.5 s and **fails open**: no rate limit, no revocation, no cache — each failure logs `Redis … failed, continuing without it` at `WARNING`. No request fails because of Redis |
+| Redis restarts empty | Counters reset, revoked tokens that have not yet expired work again, cached diagnoses are recomputed |
+| Several deployments share one Redis | Give each its own `REDIS_KEY_PREFIX`; otherwise they share counters and each other's revocations |
 
-Every key carries a TTL, so Redis needs no eviction policy or cleanup job for this
+Every key carries a TTL — the rate-limit window, the token's remaining lifetime, or
+`DIAGNOSIS_CACHE_TTL_SECONDS` — so Redis needs no eviction policy or cleanup job for this
 application. Any Redis 6 or later works; nothing uses a command newer than that.
 
 **Running one locally.** Redis publishes no Windows build, so on Windows use Docker or WSL:
@@ -212,8 +220,19 @@ docker exec techvalley-redis redis-cli ping          # PONG
 **Checking what it holds:**
 
 ```bash
-redis-cli --scan --pattern 'techvalley:*'
+redis-cli --scan --pattern 'techvalley:*'           # login:account:…, login:ip:…, revoked:…, diagnosis:…
+redis-cli ttl techvalley:login:account:admin@techvalley.vn
+redis-cli del techvalley:login:account:admin@techvalley.vn   # lift one account's lockout early
 ```
+
+With the in-memory store the only way to lift a lockout early is a restart, which also
+forgets every revocation.
+
+The rate-limit numbers are policy, not arithmetic the documentation quotes elsewhere:
+changing `LOGIN_MAX_FAILURES_*` or `LOGIN_WINDOW_SECONDS` in a deployment needs no other
+change. Changing their defaults in `app/config.py` moves
+[../api/AUTHENTICATION.md § 2](../api/AUTHENTICATION.md#2-login-rate-limit) and
+[../manual/USER_MANUAL.md § 3](../manual/USER_MANUAL.md#3-signing-in) with them.
 
 ---
 
@@ -288,7 +307,8 @@ otherwise it reads a different `.env` and reports values the server never saw.
 - Rotating `SECRET_KEY` invalidates every issued token (§ 3). Plan it as a brief forced
   re-login, not as a transparent change.
 - `REDIS_URL` can carry a password (`rediss://:<password>@host`). Treat it as a secret like
-  the other two, and keep Redis itself off the public network.
+  the other two, and keep Redis itself off the public network — it holds which tokens are
+  revoked.
 
 ---
 
@@ -304,3 +324,4 @@ otherwise it reads a different `.env` and reports values the server never saw.
 | [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md) | The tokens `SECRET_KEY` signs |
 | [../business-rules/README.md](../business-rules/README.md) | The rules the threshold settings parameterise |
 | [../demo/ACCOUNTS.md](../demo/ACCOUNTS.md) | The seeded credentials § 9 warns about |
+| [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md#2-login-rate-limit) | What the rate-limit and revocation settings of § 6 control |

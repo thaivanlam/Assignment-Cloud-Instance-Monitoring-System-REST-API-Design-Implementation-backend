@@ -16,7 +16,7 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 | Date | Milestone | Highlights |
 |---|---|---|
-| [2026-09-15](#2026-09-15--a-diagnosis-cache-and-optional-redis) | Diagnosis cache, optional Redis | A model diagnosis is reused while the instance is unchanged; short-lived state can live in Redis |
+| [2026-09-15](#2026-09-15--logout-a-login-rate-limit-and-a-diagnosis-cache) | Logout, login rate limit, diagnosis cache | SEC-04 and SEC-05 fixed; `POST /api/auth/logout`, `429` on repeated failed logins, optional Redis |
 | [2026-09-05](#2026-09-05--perf-14-fixed-one-anthropic-client-for-the-process) | PERF-14 fixed | The diagnosis endpoint stops building an HTTP client, and a connection pool, per request |
 | [2026-09-05](#2026-09-05--perf-12-fixed-the-cost-forecast-counts-in-sql) | PERF-12 fixed | The forecast counts running instances with a `GROUP BY` instead of loading every one of them |
 | [2026-09-05](#2026-09-05--perf-11-fixed-the-single-object-guard-stops-loading-the-client) | PERF-11 fixed | A single-object endpoint no longer fetches a whole `clients` row to compare one integer |
@@ -50,40 +50,82 @@ Categories follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): **Ad
 
 ---
 
-## 2026-09-15 — A diagnosis cache, and optional Redis
+## 2026-09-15 — Logout, a login rate limit, and a diagnosis cache
 
-The first feature built on a new short-lived store, which keeps state in process memory by
-default or in Redis when `REDIS_URL` is set. 137 tests pass — the 129 that existed,
-unchanged, plus 8 new ones.
+Three features that each need state which outlives a request but not a restart, built on one
+new store that keeps it in process memory by default or in Redis when `REDIS_URL` is set.
+Two security findings closed and one in part. 149 tests pass — the 129 that existed, two of
+them adjusted for the new required claim, plus 20 new ones.
 
 ### Added
 
+- **`POST /api/auth/logout`** — `204`, and the token it was called with answers
+  `401 Token has been revoked` from then on. Only that token: the member's other sessions
+  keep working. The revocation is stored by `jti` until the token's own expiry, so the
+  denylist never outgrows one token lifetime
+  ([../api/AUTHENTICATION.md § 4](../api/AUTHENTICATION.md#4-logout-and-revocation)).
+- **A login rate limit.** 10 failed attempts per account or 50 per client address within
+  15 minutes answer `429 Too many failed login attempts. Try again later.` with
+  `Retry-After` — even for the right password, and without running PBKDF2. A success clears
+  the account's counter. Every failed login is now logged at `WARNING`
+  ([../api/AUTHENTICATION.md § 2](../api/AUTHENTICATION.md#2-login-rate-limit)).
 - **A diagnosis answer cache.** `GET /api/instances/{id}/diagnosis` reuses a model answer for
   30 minutes while the instance and its recent alerts are unchanged, keyed on a hash of the
   exact request, so a status change or a new or resolved alert is always a fresh call. The
-  response is unchanged; the rule-based fallback is never cached. `DIAGNOSIS_CACHE_TTL_SECONDS`
-  sets the lifetime, `0` turns it off
+  response is unchanged; the rule-based fallback is never cached
   ([../design/LLM_FEATURE.md § 4.7](../design/LLM_FEATURE.md#47-the-answer-cache)).
-- **Optional Redis.** `app/core/store.py` keeps short-lived state in process memory, or in
-  Redis when `REDIS_URL` is set — needed for the cache to be shared across workers. Redis
-  failures fail open: every diagnosis then calls the provider, as before. New dependency
-  `redis`; `fakeredis` for the tests
-  ([../operations/CONFIGURATION.md § 6](../operations/CONFIGURATION.md#6-redis_url--shared-state)).
-- **8 functional tests** in `test_diagnosis.py`, recorded as TC-DIAG-10 … 16, including the
-  Redis backend and a Redis outage.
+- **Optional Redis.** `app/core/store.py` backs all three with process memory, or with Redis
+  when `REDIS_URL` is set — required for them to hold across several workers, servers or
+  serverless instances. Redis failures fail open. New settings: `REDIS_URL`,
+  `REDIS_KEY_PREFIX`, `LOGIN_MAX_FAILURES_PER_ACCOUNT`, `LOGIN_MAX_FAILURES_PER_IP`,
+  `LOGIN_WINDOW_SECONDS`, `DIAGNOSIS_CACHE_TTL_SECONDS`. New dependency `redis`; `fakeredis`
+  for the tests.
+- **20 functional tests** — 10 cases and 2 parametrized variants in `test_auth.py`, 8 in
+  `test_diagnosis.py` — recorded as TC-AUTH-10 … 18 and TC-DIAG-10 … 16, including the Redis
+  backend and a Redis outage.
+- **Two Swagger captures**, `30_logout_204` and `31_login_rate_limited_429`, and the
+  `prepare` hook in the capture script that the second one needs.
+
+### Changed
+
+- **Tokens carry `iat` and `jti`, and `exp` and `jti` are required on decode.** A token
+  without them — including every token issued before this change — answers
+  `401 Invalid token`, so **upgrading signs everyone out once**.
+- **Token decoding moved into a `get_token_claims` dependency** that `get_current_member`
+  now builds on; a revoked token is rejected before the member is loaded.
+
+### Fixed
+
+- **[SEC-04](../security/SECURITY_BUGS.md#sec-04)** — no logout and no revocation.
+- **[SEC-05](../security/SECURITY_BUGS.md#sec-05)** — unlimited, unlogged login guesses, and
+  the CPU-exhaustion lever they gave.
+- **[SEC-08](../security/SECURITY_BUGS.md#sec-08)**, in part — `jti` and `iat` added;
+  `iss` / `aud` still open.
 
 ### Documentation
 
-- [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) — § 4.7 on the cache, which replaces
-  the "no caching" limitation; [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — the
-  short-lived store.
+- [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md) — new §§ 2 and 4 on the rate limit and
+  logout, the claim list, and the failure table; [../api/ERRORS.md](../api/ERRORS.md),
+  [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../api/OVERVIEW.md](../api/OVERVIEW.md) —
+  `429`, `Token has been revoked`, the logout endpoint and the cache note.
+- [../requirements/FRS.md](../requirements/FRS.md) (new F-AUTH-04, F-AUTH-01/02 and F-DIAG-01
+  processing), [../requirements/SRS.md](../requirements/SRS.md) (NFR-SEC-07 met, new
+  NFR-SEC-09), [../requirements/BRD.md](../requirements/BRD.md),
+  [../requirements/USE_CASES.md](../requirements/USE_CASES.md) (UC-01 A5, A6),
+  [../manual/USER_MANUAL.md](../manual/USER_MANUAL.md).
+- [../design/LLM_FEATURE.md](../design/LLM_FEATURE.md) — § 4.7 on the cache;
+  [../design/ARCHITECTURE.md](../design/ARCHITECTURE.md) — the short-lived store.
 - [../operations/CONFIGURATION.md](../operations/CONFIGURATION.md) — new § 6 on `REDIS_URL`,
-  later sections renumbered.
-- [../api/ENDPOINTS.md](../api/ENDPOINTS.md), [../requirements/FRS.md](../requirements/FRS.md)
-  (F-DIAG-01 processing), [../manual/USER_MANUAL.md](../manual/USER_MANUAL.md) § 10.
+  later sections renumbered; [../operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md) —
+  Redis with `--workers` and on serverless, `--proxy-headers` for the address limit;
+  [../operations/RUNBOOKS.md](../operations/RUNBOOKS.md) — R16 (`429`) and R17 (state not
+  shared).
+- [../security/SECURITY_BUGS.md](../security/SECURITY_BUGS.md) and its README — the three
+  findings' status and *The fix that landed*.
 - [../testing/](../testing/README.md), [../onboarding/READING_ORDER.md](../onboarding/READING_ORDER.md)
-  (stops 27a–27b, 77b, 81a–81c), and the counts in [../../README.md](../../README.md) and
-  [../../CLAUDE.md](../../CLAUDE.md) — 129 → 137 tests.
+  (stops 27a–27e, 28b, 29b, 77b, 81a–81c), [../screenshots/README.md](../screenshots/README.md),
+  and the counts in [../../README.md](../../README.md) and [../../CLAUDE.md](../../CLAUDE.md) —
+  129 → 149 tests, 19 → 20 endpoints, 29 → 31 captures.
 
 ---
 

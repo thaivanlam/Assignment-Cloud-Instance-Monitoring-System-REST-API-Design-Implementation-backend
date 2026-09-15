@@ -19,7 +19,8 @@ Detailed request/response shapes are in [ENDPOINTS.md](ENDPOINTS.md).
 | Tag | Method | Path | Purpose |
 |---|---|---|---|
 | Health | `GET` | `/` | Liveness probe |
-| Auth | `POST` | `/api/auth/login` | Exchange credentials for a JWT |
+| Auth | `POST` | `/api/auth/login` | Exchange credentials for a JWT — rate-limited on failures |
+| Auth | `POST` | `/api/auth/logout` | Revoke the token sent with the request |
 | Instances | `POST` | `/api/instances` | Register an instance |
 | Instances | `GET` | `/api/instances` | List with pagination / filter / sort |
 | Instances | `GET` | `/api/instances/{id}` | Fetch one instance |

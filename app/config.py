@@ -13,10 +13,15 @@ class Settings(BaseSettings):
 
     ANTHROPIC_API_KEY: str = ""
 
-    # Shared short-lived state — values that must outlive a request but not a restart.
+    # Shared short-lived state — login counters, revoked tokens, cached diagnoses.
     # Empty keeps it in process memory, which is correct for a single worker only.
     REDIS_URL: str = ""
     REDIS_KEY_PREFIX: str = "techvalley:"
+
+    # Login rate limit: failed attempts allowed per window, per account and per client IP
+    LOGIN_MAX_FAILURES_PER_ACCOUNT: int = 10
+    LOGIN_MAX_FAILURES_PER_IP: int = 50
+    LOGIN_WINDOW_SECONDS: int = 900
 
     # How long an LLM diagnosis is reused for an unchanged instance; 0 disables the cache
     DIAGNOSIS_CACHE_TTL_SECONDS: int = 1800

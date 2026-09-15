@@ -125,8 +125,14 @@ curl -H "Authorization: Bearer <accessToken>" http://127.0.0.1:8000/api/monitor/
 
 - A token lasts **120 minutes**. When it expires you get
   `401 {"detail": "Token has expired"}` — sign in again. There is no "stay signed in".
-- There is no sign-out. Closing the browser is enough for practical purposes; the token
-  simply expires.
+- **To sign out**, call `POST /api/auth/logout` with your token — in Swagger, run it
+  *before* clicking **Logout** in the Authorize dialog, which only makes the browser forget
+  the token. The token stops working at once; signing out on one device does not sign you
+  out on another.
+- **Ten wrong passwords** for one account within 15 minutes lock that account's sign-in
+  until the 15 minutes are up — even with the right password. The answer is
+  `429 Too many failed login attempts`, and its `Retry-After` header says how many seconds
+  are left. Wait; there is nothing an administrator needs to reset.
 - To switch users, repeat the steps above with the other account's credentials.
 - If your email or password is wrong you get the same message either way —
   `Invalid email or password`. That is deliberate, so the login page cannot be used to
@@ -542,8 +548,10 @@ Every failure comes back with a `detail` line in plain words. Read that first.
 |---|---|---|
 | `401 Not authenticated. Provide a Bearer token.` | You did not send a token | Sign in, and in Swagger click **Authorize** |
 | `401 Token has expired` | More than 120 minutes since you signed in | Sign in again |
-| `401 Invalid token` | The token is damaged or was issued by a different system | Sign in again; copy the whole token |
+| `401 Invalid token` | The token is damaged, was issued by a different system, or was issued before an upgrade | Sign in again; copy the whole token |
+| `401 Token has been revoked` | You, or someone with your token, signed out with it | Sign in again |
 | `401 Invalid email or password` | Wrong credentials — it will not say which | Re-type both. Nobody can tell you which half was wrong; that is by design |
+| `429 Too many failed login attempts` | Too many wrong passwords for this account, or from your network, in 15 minutes | Wait for the seconds in `Retry-After`, then sign in with the right password |
 | `401 Member no longer exists` | Your account was removed after you signed in | Contact an administrator |
 | `403 ADMIN role required` | Only administrators can register clients | Ask an administrator |
 | `403 CLIENT_MANAGER can only access clients assigned to them` | The instance, client or alert belongs to another manager | Check the id. If it should be yours, ask an administrator to reassign the client |

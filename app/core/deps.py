@@ -4,6 +4,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.revocation import is_token_revoked
 from app.core.security import decode_access_token
 from app.database import get_db
 from app.models import Client, Member, Role
@@ -11,10 +12,18 @@ from app.models import Client, Member, Role
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def get_current_member(
+def get_token_claims(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
-) -> Member:
+) -> dict:
+    """The verified claims of the request's bearer token — signature, expiry, revocation.
+
+    Split out of `get_current_member` so `POST /api/auth/logout` can reach the `jti` and
+    `exp` of the token it is revoking. FastAPI caches a dependency within one request, so an
+    endpoint that asks for both decodes the token once.
+
+    The revocation check runs before the member is loaded, so a revoked token costs no
+    database round trip.
+    """
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -28,6 +37,15 @@ def get_current_member(
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+    if is_token_revoked(payload["jti"]):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
+    return payload
+
+
+def get_current_member(
+    payload: dict = Depends(get_token_claims),
+    db: Session = Depends(get_db),
+) -> Member:
     member = db.get(Member, int(payload["sub"]))
     if member is None:
         raise HTTPException(status_code=401, detail="Member no longer exists")

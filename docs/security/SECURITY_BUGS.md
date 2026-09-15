@@ -2,9 +2,9 @@
 
 A review of `app/` for defects that let an attacker read what they should not, act as
 someone they are not, or keep acting after they should have been cut off. Fifteen
-findings, ranked by what an attacker gains from each. **None are fixed yet** — the
-**Status** column below is `Open` throughout, and the suggested order of work is at
-[§ Where to start](#where-to-start).
+findings, ranked by what an attacker gains from each. **Two are fixed and one partly** —
+SEC-04, SEC-05 and SEC-08, each with a *The fix that landed* section; the **Status** column
+below says which, and the suggested order of work is at [§ Where to start](#where-to-start).
 
 The review was scoped to three questions, in this order:
 
@@ -14,7 +14,7 @@ The review was scoped to three questions, in this order:
    credentials, or the existence of records the caller is not entitled to?
 3. **Session integrity** — can a token be forged, and can an issued one be stopped?
 
-Nothing here is a functional bug. All 129 tests pass, and every endpoint returns the
+Nothing here is a functional bug. All 149 tests pass, and every endpoint returns the
 answer its documentation promises. These are the places where it also answers someone who
 should not have been asking.
 
@@ -31,11 +31,11 @@ any of them can be re-run or challenged.
 | [SEC-01](#sec-01) | The default `SECRET_KEY` ships in the repository, so anyone can sign an `ADMIN` token | `config.py` | Critical | Open |
 | [SEC-02](#sec-02) | Working credentials are published in the unauthenticated OpenAPI document | `main.py` | Critical | Open |
 | [SEC-03](#sec-03) | A live `ADMIN` JWT is committed in a screenshot, signed with that default key | `docs/screenshots/` | High | Open |
-| [SEC-04](#sec-04) | There is no logout, and no way to revoke a token that has been issued | `controllers/auth_controller.py` | High | Open |
-| [SEC-05](#sec-05) | Login has no rate limit, no lockout, and no failure logging | `controllers/auth_controller.py` | High | Open |
+| [SEC-04](#sec-04) | There is no logout, and no way to revoke a token that has been issued | `controllers/auth_controller.py` | High | **Fixed** |
+| [SEC-05](#sec-05) | Login has no rate limit, no lockout, and no failure logging | `controllers/auth_controller.py` | High | **Fixed** |
 | [SEC-06](#sec-06) | `404` before `403` tells a caller which records exist in other tenants | controllers | Medium | Open |
 | [SEC-07](#sec-07) | Instance names are interpolated into the LLM prompt as instructions | `services/llm_service.py` | Medium | Open |
-| [SEC-08](#sec-08) | The JWT carries no `jti`, `iat`, `iss` or `aud`, so nothing is revocable or bound | `core/security.py` | Medium | Open |
+| [SEC-08](#sec-08) | The JWT carries no `jti`, `iat`, `iss` or `aud`, so nothing is revocable or bound | `core/security.py` | Medium | **Partly fixed** — `jti` and `iat` added; `iss` / `aud` open |
 | [SEC-09](#sec-09) | Login timing discloses which email addresses have accounts | `controllers/auth_controller.py` | Medium | Open |
 | [SEC-10](#sec-10) | No security headers and no CORS policy — the app registers no middleware | `main.py` | Low | Open |
 | [SEC-11](#sec-11) | A validly signed token with no `sub` returns `500` instead of `401` | `core/deps.py` | Low | Open |
@@ -83,6 +83,11 @@ PyJWT verifies `exp` when it is present but does not require it to be, and
 `decode_access_token` ([security.py:41-42](../../app/core/security.py#L41-L42)) asks for
 no required claims. So an attacker who knows the key does not merely get a session — they
 get one that never ends, which no expiry policy or future logout can touch.
+
+*Since the partial fix of [SEC-08](#sec-08), `decode_access_token` requires `exp` and
+`jti`, so the exp-less forgery above is now rejected with `401 Invalid token`. That does not
+narrow this finding: an attacker who holds the key adds both claims to the forgery, and it
+is accepted — with an `exp` as far in the future as they like.*
 
 **Why it matters.** This is not a weakness that needs another bug to be useful. It is
 complete authentication bypass at the highest privilege level, reachable by anyone who can
@@ -227,12 +232,47 @@ ticket all stay exploitable for the full window with no lever to pull.
 2. Add a `tokensValidAfter` timestamp per `Member`, and reject any token whose `iat`
    predates it. One column revokes every session for a user — what a password change or a
    compromise needs — and it costs nothing extra, because the row is already loaded on
-   every request ([deps.py:32](../../app/core/deps.py#L32)).
+   every request ([deps.py:49](../../app/core/deps.py#L49)).
 3. Move to short access tokens plus a refresh token, which is the only option that makes
    revocation cheap in the general case. It changes the client contract, so it belongs in
    the same change as [SEC-14](#sec-14) and an update to
    [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md), which currently states there is no
    refresh endpoint by design.
+
+#### The fix that landed
+
+Option 1, on top of the `jti` from [SEC-08](#sec-08). Options 2 and 3 were not done.
+
+- **`POST /api/auth/logout`** ([auth_controller.py:46](../../app/controllers/auth_controller.py#L46))
+  answers `204` and puts the token's `jti` on a denylist
+  ([revocation.py](../../app/core/revocation.py)). Only that token is revoked; the
+  member's other sessions keep working.
+- **Checked on every request.** Token decoding moved out of `get_current_member` into a new
+  `get_token_claims` dependency ([deps.py:15](../../app/core/deps.py#L15)), which rejects a
+  denylisted `jti` with `401 Token has been revoked` *before* the member is loaded. Every
+  protected endpoint depends on it through `get_current_member`, so no route can skip it.
+- **The denylist cannot grow without bound.** An entry's TTL is the token's remaining
+  lifetime, `exp − now`; after that the signature check rejects the token anyway.
+- **Where it lives.** In the store `REDIS_URL` selects
+  ([store.py](../../app/core/store.py)): process memory by default, Redis when set. With
+  process memory and more than one worker, a logout reaches only the worker that served it
+  — which is why [../operations/DEPLOYMENT.md § 5](../operations/DEPLOYMENT.md#5-launch--a-single-server)
+  now requires `REDIS_URL` alongside `--workers`.
+- **Fails open.** If Redis is unreachable, a revoked token is accepted again and a warning
+  is logged, rather than every authenticated request failing. That is a deliberate
+  availability-over-revocation trade for an internal tool; a deployment that needs the
+  opposite would make `RedisStore.exists` raise instead of answering `False`.
+
+Re-running the route enumeration now finds `POST /api/auth/logout`. Pinned by
+`logout_revokes_the_token_it_was_called_with`,
+`logout_leaves_the_members_other_sessions_valid`,
+`a_revocation_is_kept_only_as_long_as_the_token_lives`,
+`rate_limit_and_revocation_share_state_through_redis` and `a_redis_outage_fails_open`
+([../testing/FUNCTIONAL_TESTS.md § 4.1](../testing/FUNCTIONAL_TESTS.md#41-test_authpy--health-check-login-limits-logout-and-the-jwt-guard-31-cases)).
+
+**Still open:** revoking *every* session of one member at once — option 2, the
+password-change and compromise case. Deleting the member or rotating `SECRET_KEY` remain the
+only ways.
 
 ---
 
@@ -266,6 +306,43 @@ per account per 15 minutes) is enough here and needs no dependency. Log every fa
 address, account and timestamp; a lockout nobody can see is only half a control. Add a
 functional test for the limit, so it cannot be removed silently
 ([../testing/FUNCTIONAL_TESTS.md](../testing/FUNCTIONAL_TESTS.md)).
+
+#### The fix that landed
+
+The proposed fix, with the numbers made settings
+([rate_limit.py](../../app/core/rate_limit.py)).
+
+| Counter | Default | Setting |
+|---|---|---|
+| Failures per account (email, lower-cased) | 10 | `LOGIN_MAX_FAILURES_PER_ACCOUNT` |
+| Failures per client address | 50 | `LOGIN_MAX_FAILURES_PER_IP` |
+| Fixed window | 15 min | `LOGIN_WINDOW_SECONDS` |
+
+- **Refused before the password is checked.** Over either limit the answer is `429` with
+  `Retry-After`, and `verify_password` does not run — so a flood of logins no longer costs
+  45 ms of CPU each, which removes the denial-of-service lever above. Even the right
+  password is refused while the account is over its limit.
+- **Counted up front, returned on success.** The attempt is added to both counters before
+  the lookup; a successful login clears the account counter and gives the address back its
+  one attempt. Counting only after a failure would let concurrent guesses all pass the check
+  before any was recorded.
+- **Every failure is logged** at `WARNING` with the email and the client address.
+- **Shared across processes when `REDIS_URL` is set**, and fail-open if Redis is
+  unreachable — the same store and the same trade as [SEC-04](#sec-04).
+
+Re-running the reproduction: 10 wrong passwords answer `401`, the 11th attempt answers
+`429` whether or not its password is right, and the account logs in again once the window
+has passed. Pinned by `login_is_refused_once_an_account_reaches_its_failure_limit`,
+`the_account_limit_lifts_when_its_window_ends`, `a_successful_login_clears_the_account_counter`,
+`one_address_is_limited_across_many_accounts` and
+`successful_logins_do_not_use_up_the_address_limit`.
+
+**What it trades.** Anyone who knows an address can lock that account out for up to one
+window by failing on purpose. Behind a reverse proxy without `--proxy-headers`, every user
+shares the proxy's address counter
+([../operations/RUNBOOKS.md § R16](../operations/RUNBOOKS.md#r16--login-answers-429)).
+[SEC-09](#sec-09), the timing difference, is unaffected — it now simply has fewer guesses
+to work with.
 
 ---
 
@@ -386,6 +463,27 @@ requires no claims at all, which is what let the forged token in [SEC-01](#sec-0
 It is a small change and it is the precondition for [SEC-04](#sec-04). The claim list is
 documented in [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md) and has to move with it.
 
+#### The fix that landed
+
+Half of it — the half [SEC-04](#sec-04) needed.
+
+- **Added:** `jti` (`uuid4().hex`) and `iat` at issue
+  ([security.py:31](../../app/core/security.py#L31)).
+- **Required on decode:** `exp` and `jti`
+  ([security.py:46](../../app/core/security.py#L46)). A token missing either is
+  `401 Invalid token`, which also rejects the exp-less forgery of [SEC-01](#sec-01).
+  Tokens issued before the change carry no `jti`, so an upgrade signs everyone out once.
+- **Not done:** `iss` and `aud`, and requiring `sub` and `iat`. Requiring `sub` is the
+  [SEC-11](#sec-11) fix and is left with it; `iss` / `aud` only matter once another service
+  shares the key.
+
+```
+issued token claims: ['email', 'exp', 'iat', 'jti', 'role', 'sub']
+```
+
+Pinned by the `jti` / `iat` assertions in `login_returns_a_usable_token_with_role_and_name`
+and the `no-jti-so-not-revocable` case of `invalid_tokens_are_rejected`.
+
 ---
 
 ### SEC-09
@@ -393,7 +491,7 @@ documented in [../api/AUTHENTICATION.md](../api/AUTHENTICATION.md) and has to mo
 **How long a login takes says whether the email address has an account.**
 
 `member is None or not verify_password(...)`
-([auth_controller.py:15](../../app/controllers/auth_controller.py#L15)) short-circuits: if
+([auth_controller.py:32](../../app/controllers/auth_controller.py#L32)) short-circuits: if
 no member matches, Python never evaluates the right-hand side, and the 260,000-iteration
 PBKDF2 comparison never runs. The difference is not subtle:
 
@@ -467,7 +565,7 @@ valid signature, no 'sub' claim -> unhandled KeyError: 'sub'  (FastAPI returns 5
 
 `get_current_member` handles `ExpiredSignatureError` and `InvalidTokenError` and then
 indexes the payload directly: `db.get(Member, int(payload["sub"]))`
-([deps.py:32](../../app/core/deps.py#L32)). A payload with no `sub` raises `KeyError`; one
+([deps.py:49](../../app/core/deps.py#L49)). A payload with no `sub` raises `KeyError`; one
 whose `sub` is not numeric raises `ValueError`. Neither is a `jwt` exception, so neither is
 caught, and a malformed-but-authentic token produces a `500` where the honest answer is
 `401`.
@@ -544,8 +642,9 @@ the consumer's job; this only stops the database from being a delivery mechanism
 **A 120-minute token, with no way to shorten the window.**
 
 `ACCESS_TOKEN_EXPIRE_MINUTES` defaults to 120 ([config.py:10](../../app/config.py#L10)) —
-two hours of validity for a token that carries `role: ADMIN`, cannot be revoked
-([SEC-04](#sec-04)), and cannot even be identified ([SEC-08](#sec-08)). Two hours is not
+two hours of validity for a token that carries `role: ADMIN`, and that can be revoked
+only by the holder logging out with it ([SEC-04](#sec-04)) — not by an administrator, and
+not all of one member's tokens at once. Two hours is not
 unreasonable on its own; it is unreasonable *as the only bound in the system*, because it
 is simultaneously the exposure window and the entire session-management policy.
 
@@ -566,7 +665,7 @@ own trades one problem for another.
 incomplete.**
 
 The API issues a bearer token and reads it from the `Authorization` header
-([deps.py:11](../../app/core/deps.py#L11)). **It sets no cookies at all** — so the usual
+([deps.py:12](../../app/core/deps.py#L12)). **It sets no cookies at all** — so the usual
 questions about `HttpOnly`, `Secure` and `SameSite` do not apply here, and neither does
 CSRF, which is worth stating so it is clear it was considered rather than missed.
 
@@ -619,7 +718,7 @@ for both failure modes ([SEC-09](#sec-09) is the timing, not the wording).
 
 **The database is authoritative for role and existence, not the token.**
 `get_current_member` re-loads the `Member` on every request
-([deps.py:32-34](../../app/core/deps.py#L32-L34)) and `require_admin` reads `member.role`
+([deps.py:49-52](../../app/core/deps.py#L49-L52)) and `require_admin` reads `member.role`
 from that row, so the `role` claim inside the token is decoration. Verified:
 
 ```
@@ -656,9 +755,9 @@ chosen so it does not have to be redone by the next one.
 | 1 | Refuse to boot without a configured `SECRET_KEY`; require `exp` and `sub` on decode | [SEC-01](#sec-01), [SEC-11](#sec-11) | Until this lands, every other control can be bypassed by signing a token. One config validator and one `options=` argument |
 | 2 | Take credentials out of the OpenAPI description; gate `/docs` off in a deployment | [SEC-02](#sec-02) | Same bypass, no attacker skill required. Independent of everything else |
 | 3 | Rotate the key and re-capture `02_login_admin` | [SEC-03](#sec-03) | Only meaningful after 1; rotation invalidates the committed token |
-| 4 | Add `jti`, `iat`, `iss`, `aud` and verify them | [SEC-08](#sec-08) | The precondition for revocation — doing 5 first would mean doing it twice |
-| 5 | Add `POST /api/auth/logout` and `tokensValidAfter` | [SEC-04](#sec-04) | The finding the review was asked for. Cheap once 4 exists |
-| 6 | Rate-limit and log failed logins | [SEC-05](#sec-05) | Independent; also removes the CPU-exhaustion lever |
+| 4 | Add `jti`, `iat`, `iss`, `aud` and verify them | [SEC-08](#sec-08) | The precondition for revocation — doing 5 first would mean doing it twice. **`jti` and `iat` done**; `iss` / `aud` open |
+| 5 | Add `POST /api/auth/logout` and `tokensValidAfter` | [SEC-04](#sec-04) | The finding the review was asked for. Cheap once 4 exists. **Logout done**; `tokensValidAfter` open |
+| 6 | Rate-limit and log failed logins | [SEC-05](#sec-05) | Independent; also removes the CPU-exhaustion lever. **Done** |
 | 7 | Constant-time login path with a dummy hash | [SEC-09](#sec-09) | Small, and worth more after 6 caps the guess rate |
 | 8 | Fence and sanitise the LLM context; constrain the free-text fields | [SEC-07](#sec-07), [SEC-13](#sec-13) | Same input fields, one change to `schemas/` and one to `llm_service.py` |
 | 9 | Security-header middleware | [SEC-10](#sec-10) | Defence in depth; no dependencies |
